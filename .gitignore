@@ -1,0 +1,6 @@
+config.yaml
+.env
+venv
+vosk-model-small-pt-0.3
+vosk-model-small-pt-0.3.zip
+
