@@ -1,0 +1,92 @@
+# ============================================================
+#  JARVIS — Configuração Central
+#  Edite aqui sem tocar no código Python
+# ============================================================
+
+api:
+  gemini_key: "AIzaSyAWFPgSY8jwU1AZOZUDK1FzJsxeOs8K4Jw"        # Chave da Google AI Studio
+  gemini_model: "gemini-2.0-flash"
+  max_tokens: 1024
+  historico_max: 10                    # Últimas N trocas enviadas ao Gemini
+
+voz:
+  engine: "edge-tts"                   # edge-tts | piper
+  voz_id: "pt-BR-FranciscaNeural"
+  silencioso: false                    # true = só exibe no HUD, não fala
+
+wake_word:
+  palavra: "jarvis"
+  engine: "vosk"                    # simples | vosk | porcupine
+  # Se usar porcupine, coloque sua chave abaixo:
+  porcupine_key: ""
+
+mic:
+  timeout_standby: 4                   # segundos esperando fala no modo standby
+  timeout_pergunta: 10                 # segundos esperando pergunta longa
+  limite_frase: 6                      # segundos máximos de frase no standby
+  limite_pergunta: 30                  # segundos máximos de frase em modo IA
+
+log:
+  ativo: true
+  arquivo: "jarvis.log"
+  nivel: "INFO"                        # DEBUG | INFO | WARNING
+
+hud:
+  largura: 160
+  altura: 260
+  opacidade: 0.85
+  fonte_titulo: "Orbitron"
+  cor_primaria: "#00FFFF"
+  cor_ia: "#A020F0"
+  cor_foco: "#FFA500"
+  cor_erro: "#FF4444"
+  cor_ok: "#00FF88"
+
+# ============================================================
+#  PLUGINS — Comandos e seus aplicativos
+#  Adicione quantos quiser sem mexer no Python
+# ============================================================
+plugins:
+
+  media:
+    ativo: true
+    comandos_pause:  ["pausar", "parar música", "para a música"]
+    comandos_next:   ["próxima", "pular", "avançar"]
+    comandos_prev:   ["voltar", "anterior", "música anterior"]
+    comandos_play:   ["tocar", "continuar", "play"]
+
+  apps:
+    ativo: true
+    mapeamento:
+      spotify:      ["spotify", "música"]
+      code:         ["code", "visual studio", "vscode", "programar"]
+      firefox:      ["navegador", "firefox", "internet"]
+      telegram:     ["telegram", "mensagens"]
+      nautilus:     ["arquivos", "explorador", "pasta"]
+      terminal:     ["terminal", "console"]
+    comando_base: "{app}"              # Como lançar: "{app}" vira "spotify", etc.
+
+  foco:
+    ativo: true
+    comandos: ["foco", "estudar", "pomodoro", "concentrar"]
+    duracao_minutos: 25
+
+  clima:
+    ativo: true
+    cidade: "Sao_Paulo"
+    comandos: ["clima", "tempo", "temperatura", "vai chover"]
+
+  hora_data:
+    ativo: true
+    comandos_hora: ["horas", "que horas", "hora certa"]
+    comandos_data: ["data", "que dia", "dia de hoje"]
+
+  bateria:
+    ativo: true
+    comandos: ["bateria", "carga", "energia"]
+
+  sistema:
+    ativo: true
+    comandos_desligar: ["desligar", "encerrar", "sair", "desativa"]
+    comandos_silencio: ["modo silencioso", "cala boca", "sem voz"]
+    comandos_voz:      ["ativar voz", "falar de novo", "modo voz"]

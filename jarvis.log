@@ -1,0 +1,16 @@
+2026-04-23 18:16:25,393  INFO     Gemini conectado.
+2026-04-23 18:16:26,833  INFO     Calibrando microfone...
+2026-04-23 18:16:28,386  INFO     Threshold: 1530
+2026-04-23 18:16:41,611  INFO     Sistema pronto. Wake word: 'jarvis'
+2026-04-23 18:52:17,405  INFO     Gemini conectado.
+2026-04-23 18:52:18,684  INFO     Calibrando microfone...
+2026-04-23 18:52:20,210  INFO     Threshold: 1120
+2026-04-23 18:52:31,824  INFO     Sistema pronto. Wake word: 'jarvis'
+2026-04-23 20:30:06,416  INFO     Gemini conectado.
+2026-04-23 20:30:07,712  INFO     Calibrando microfone...
+2026-04-23 20:30:09,239  INFO     Threshold: 1783
+2026-04-23 20:30:20,786  INFO     Sistema pronto. Wake word: 'jarvis'
+2026-04-23 20:48:56,526  INFO     Gemini conectado.
+2026-04-23 20:48:58,058  INFO     Calibrando microfone...
+2026-04-23 20:48:59,625  INFO     Threshold: 1874
+2026-04-23 20:49:12,165  INFO     Sistema pronto. Wake word: 'jarvis'
