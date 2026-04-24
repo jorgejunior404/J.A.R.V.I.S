@@ -8,10 +8,12 @@ import time
 import datetime
 import psutil
 import requests
-from dotenv import load_dotenv 
+from dotenv import load_dotenv
+
+# --- CARREGA O .env ---
 load_dotenv()
-# --- CONFIGURAÇÃO DO CÉREBRO ---
-CHAVE_API = os.getenv("")
+CHAVE_API = os.getenv("GEMINI_API_KEY")  # ← corrigido: nome da variável
+
 try:
     cliente = genai.Client(api_key=CHAVE_API)
 except Exception as e:
@@ -19,11 +21,10 @@ except Exception as e:
 
 # --- OTIMIZAÇÃO 1: Reconhecedor criado UMA VEZ, fora do loop ---
 rec = sr.Recognizer()
-rec.pause_threshold = 0.8       # reduzido de padrão (0.8 já é bom)
+rec.pause_threshold = 0.8
 rec.dynamic_energy_threshold = True
 mic = sr.Microphone()
 
-# Calibração feita UMA VEZ na inicialização
 def calibrar_microfone():
     with mic as fonte:
         rec.adjust_for_ambient_noise(fonte, duration=1.5)
@@ -92,11 +93,10 @@ class JarvisCircleHUD(ctk.CTk):
         os._exit(0)
 
 
-# --- OTIMIZAÇÃO 2: TTS assíncrono (não bloqueia o loop principal) ---
+# --- OTIMIZAÇÃO 2: TTS assíncrono ---
 _fala_thread = None
 
 def falar(texto):
-    """Fala em thread separada para não travar o loop."""
     global _fala_thread
 
     def _falar():
@@ -114,7 +114,6 @@ def falar(texto):
             if os.path.exists(arquivo_audio):
                 os.remove(arquivo_audio)
 
-    # Aguarda fala anterior terminar antes de começar nova
     if _fala_thread and _fala_thread.is_alive():
         _fala_thread.join(timeout=15)
 
@@ -123,7 +122,6 @@ def falar(texto):
 
 
 def falar_sync(texto):
-    """Versão síncrona para quando precisamos aguardar a fala terminar."""
     arquivo_audio = f"/tmp/voz_{int(time.time())}.mp3"
     try:
         subprocess.run(
@@ -139,12 +137,9 @@ def falar_sync(texto):
             os.remove(arquivo_audio)
 
 
-# --- OTIMIZAÇÃO 3: ouvir() mais rápido — sem recalibrar a cada chamada ---
 def ouvir(timeout=4, limite=5):
-    """Escuta rápida para ativação por palavra-chave."""
     try:
         with mic as fonte:
-            # adjust_for_ambient_noise REMOVIDO do loop — já foi feito na init
             audio = rec.listen(fonte, timeout=timeout, phrase_time_limit=limite)
         return rec.recognize_google(audio, language="pt-BR").lower()
     except sr.WaitTimeoutError:
@@ -157,10 +152,9 @@ def ouvir(timeout=4, limite=5):
 
 
 def ouvir_pergunta(timeout=8, limite=25):
-    """Escuta estendida para perguntas longas à IA."""
     try:
         with mic as fonte:
-            rec.adjust_for_ambient_noise(fonte, duration=0.3)  # breve re-cal após fala do Jarvis
+            rec.adjust_for_ambient_noise(fonte, duration=0.3)
             audio = rec.listen(fonte, timeout=timeout, phrase_time_limit=limite)
         return rec.recognize_google(audio, language="pt-BR").lower()
     except sr.WaitTimeoutError:
@@ -180,13 +174,7 @@ def obter_clima():
         return "N/A"
 
 
-# --- OTIMIZAÇÃO 4: Chamada à IA com timeout e tratamento robusto ---
 def consultar_ia(prompt, curto=False):
-    """
-    Consulta o Gemini com tratamento de erro completo.
-    curto=True → resposta de 1-2 frases
-    curto=False → resposta detalhada
-    """
     try:
         if not CHAVE_API:
             return "Chave de API não configurada, senhor."
@@ -197,7 +185,6 @@ def consultar_ia(prompt, curto=False):
             contents=f"Responda como o JARVIS, {instrucao}: {prompt}"
         )
 
-        # Verificação robusta da resposta
         if resposta and resposta.text:
             return resposta.text.strip()
         else:
@@ -208,15 +195,12 @@ def consultar_ia(prompt, curto=False):
         return "Houve uma falha na conexão com o Gemini, senhor."
 
 
-# --- LÓGICA PRINCIPAL DO JARVIS ---
 def rodar_jarvis(hud):
     time.sleep(1)
 
-    # Calibra microfone uma vez
     hud.safe_update(False, "CALIBRANDO", "Ajustando mic...")
     calibrar_microfone()
 
-    # Relatório de inicialização
     agora = datetime.datetime.now()
     saudacao = "Bom dia" if 5 <= agora.hour < 12 else "Boa tarde" if 12 <= agora.hour < 18 else "Boa noite"
     try:
@@ -237,9 +221,6 @@ def rodar_jarvis(hud):
 
         hud.safe_update("#00FF88", "ATIVADO", comando[:20])
 
-        # -----------------------------------------------
-        # 1. PROTOCOLO IA (ESCUTA ESTENDIDA)
-        # -----------------------------------------------
         if any(p in comando for p in ["pergunta", "ia", "ajuda", "explique", "o que é", "como funciona"]):
             hud.safe_update("#A020F0", "IA ATIVA", "Aguardando...")
             falar_sync("Estou ouvindo, senhor. Pode falar.")
@@ -255,9 +236,6 @@ def rodar_jarvis(hud):
             else:
                 falar("Não captei sua pergunta, senhor. O áudio estava degradado.")
 
-        # -----------------------------------------------
-        # 2. COMANDOS DE MÍDIA (PLAYERCTL)
-        # -----------------------------------------------
         elif any(p in comando for p in ["pausar", "parar música"]):
             os.system("playerctl pause")
             falar("Música pausada, senhor.")
@@ -271,9 +249,6 @@ def rodar_jarvis(hud):
             os.system("playerctl previous")
             falar("Retornando faixa.")
 
-        # -----------------------------------------------
-        # 3. COMANDOS DE APLICATIVOS
-        # -----------------------------------------------
         elif any(p in comando for p in ["abrir", "iniciar"]):
             if any(p in comando for p in ["spotify", "música"]):
                 subprocess.Popen(["spotify"])
@@ -288,16 +263,10 @@ def rodar_jarvis(hud):
                 falar("Não reconheci qual aplicativo abrir, senhor.")
             hud.safe_update(False, "ABRINDO APP", "")
 
-        # -----------------------------------------------
-        # 4. PROTOCOLO DE FOCO
-        # -----------------------------------------------
         elif any(p in comando for p in ["foco", "estudar"]):
             hud.safe_update("#FFA500", "MODO FOCO", "Produtividade")
             falar("Protocolo de foco iniciado. Estarei em prontidão.")
 
-        # -----------------------------------------------
-        # 5. HORA E DATA
-        # -----------------------------------------------
         elif any(p in comando for p in ["horas", "que horas"]):
             hora_atual = datetime.datetime.now().strftime("%H:%M")
             falar(f"São exatamente {hora_atual}, senhor.")
@@ -306,22 +275,15 @@ def rodar_jarvis(hud):
             hoje = datetime.datetime.now().strftime("%d de %B de %Y")
             falar(f"Hoje é {hoje}, senhor.")
 
-        # -----------------------------------------------
-        # 6. DESLIGAMENTO
-        # -----------------------------------------------
         elif any(p in comando for p in ["desligar", "encerrar", "sair"]):
             falar_sync("Desligando sistemas. Tenha um bom dia, senhor.")
             hud.animacao_shutdown()
 
-        # -----------------------------------------------
-        # 7. RESPOSTA RÁPIDA (IA curta para tudo mais)
-        # -----------------------------------------------
         else:
             hud.safe_update("#A020F0", "CONSULTANDO", "Gemini...")
             resposta = consultar_ia(comando, curto=True)
             falar(resposta)
 
-        # Retorno ao standby
         time.sleep(0.5)
         hud.safe_update(False, "STANDBY", "Aguardando...")
 
