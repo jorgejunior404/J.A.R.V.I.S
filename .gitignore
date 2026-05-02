@@ -3,4 +3,4 @@ config.yaml
 venv
 vosk-model-small-pt-0.3
 vosk-model-small-pt-0.3.zip
-
+.venv
