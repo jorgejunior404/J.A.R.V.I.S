@@ -525,10 +525,17 @@ class JarvisHUD(ctk.CTk):
         self.cv = ctk.CTkCanvas(self, width=self.W, height=self.H,
                                  bg="#040c18", highlightthickness=0)
         self.cv.place(x=0, y=0)
+        # Canvas nunca aceita foco de teclado — evita caixa branca do X11
+        self.cv.configure(takefocus=False)
+        self.cv.bind("<ButtonPress-1>", lambda e: self.cv.focus_set())
 
-        # ── Referência ao tk para uso no painel ──
+        # Desativa input method (IBus/Fcitx) nesta janela
+        self.after(200, lambda: self.tk.call("tk", "windowingsystem") and
+                   self.attributes("-type", "utility") if False else
+                   self._desativar_im())
+
         import tkinter as tk
-        self._tk = tk
+        self._tk     = tk
         self._painel = None
 
         # Estado interno
@@ -644,7 +651,8 @@ class JarvisHUD(ctk.CTk):
         # Rodapé
         self.cv.create_line(6, H-50, W-6, H-50, fill="#0a2030", width=1)
         self._btn_r = self.cv.create_rectangle(6, H-44, W-6, H-22, fill="#001828", outline="#00BFFF")
-        self._btn_t = self.cv.create_text(W//2, H-33, text="⌨  DIGITAR", font=("Courier", 8, "bold"), fill="#00BFFF")
+        self._btn_t = self.cv.create_text(W//2, H-33, text="⌨  DIGITAR",
+                                           font=("Courier", 8, "bold"), fill="#00BFFF")
         for _t in (self._btn_r, self._btn_t):
             self.cv.tag_bind(_t, "<ButtonPress-1>",   lambda e: self._toggle_painel())
             self.cv.tag_bind(_t, "<Enter>", lambda e: self.cv.itemconfig(self._btn_r, fill="#003850"))
@@ -815,23 +823,37 @@ class JarvisHUD(ctk.CTk):
     def _do_move(self, e):
         self.geometry(f"+{self.winfo_x()+(e.x-self._dx)}+{self.winfo_y()+(e.y-self._dy)}")
 
+    def _desativar_im(self):
+        """Desativa input method do X11 (IBus/Fcitx) nesta janela via xprop."""
+        try:
+            import subprocess as _sp
+            wid = hex(self.winfo_id())
+            # WM_HINTS com InputHint=False diz ao X11 que esta janela não quer teclado
+            _sp.run(["xprop", "-id", wid,
+                     "-f", "WM_HINTS", "32i",
+                     "-set", "WM_HINTS", "0"],
+                    capture_output=True)
+        except Exception:
+            pass
+
     def set_processador(self, fn):
         """Registra a função que processa comandos de texto."""
         self._processador = fn
 
     def _toggle_painel(self):
+        tk = self._tk
         if self._painel and self._painel.winfo_exists():
             self._painel.destroy()
             self._painel = None
             self.cv.itemconfig(self._btn_t, text="⌨  DIGITAR")
             self.cv.itemconfig(self._btn_r, fill="#001828", outline="#00BFFF")
             return
-        tk = self._tk
+
         self.cv.itemconfig(self._btn_t, text="✕  FECHAR")
         self.cv.itemconfig(self._btn_r, fill="#1a0010", outline="#FF4444")
 
         hx, hy = self.winfo_x(), self.winfo_y()
-        pw, ph = 360, self.H
+        pw, ph  = 360, self.H
         px = hx - pw - 8
         if px < 0:
             px = hx + self.W + 8
@@ -847,13 +869,16 @@ class JarvisHUD(ctk.CTk):
         inner.pack(fill="both", expand=True, padx=1, pady=1)
 
         tk.Label(inner, text="J.A.R.V.I.S  ·  COMANDO",
-                 bg="#040c18", fg="#00BFFF", font=("Courier", 9, "bold")).pack(pady=(10,4))
+                 bg="#040c18", fg="#00BFFF",
+                 font=("Courier", 9, "bold")).pack(pady=(10, 4))
         tk.Frame(inner, bg="#0a2030", height=1).pack(fill="x", padx=8)
 
-        self._hist_lb = tk.Listbox(inner, bg="#040c18", fg="#1a7090",
-                                    selectbackground="#003850", selectforeground="#00BFFF",
-                                    font=("Courier", 8), relief="flat", bd=0,
-                                    highlightthickness=0, activestyle="none")
+        self._hist_lb = tk.Listbox(
+            inner, bg="#040c18", fg="#1a7090",
+            selectbackground="#003850", selectforeground="#00BFFF",
+            font=("Courier", 8), relief="flat", bd=0,
+            highlightthickness=0, activestyle="none"
+        )
         self._hist_lb.pack(fill="both", expand=True, padx=8, pady=6)
         for cmd in reversed(list(self._hist_cmds)):
             self._hist_lb.insert("end", f"  › {cmd}")
@@ -861,37 +886,50 @@ class JarvisHUD(ctk.CTk):
         def _reusar(e):
             sel = self._hist_lb.curselection()
             if sel:
-                self._pvar.set(self._hist_lb.get(sel[0]).strip().lstrip("› ").strip())
+                self._pvar.set(self._hist_lb.get(sel[0]).strip().lstrip("›").strip())
                 self._pentry.focus_force()
         self._hist_lb.bind("<Double-Button-1>", _reusar)
 
         tk.Frame(inner, bg="#0a2030", height=1).pack(fill="x", padx=8)
         tk.Label(inner, text="Enter envia  ·  Esc fecha",
-                 bg="#040c18", fg="#1a4060", font=("Courier", 7)).pack(pady=3)
+                 bg="#040c18", fg="#1a4060",
+                 font=("Courier", 7)).pack(pady=3)
 
         fr = tk.Frame(inner, bg="#040c18")
-        fr.pack(fill="x", padx=8, pady=(0,8))
+        fr.pack(fill="x", padx=8, pady=(0, 8))
 
-        self._pvar = tk.StringVar()
-        self._pentry = tk.Entry(fr, textvariable=self._pvar,
-                                 bg="#040c18", fg="#00BFFF",
-                                 insertbackground="#00BFFF",
-                                 selectbackground="#003850",
-                                 relief="flat", highlightthickness=1,
-                                 highlightcolor="#00BFFF",
-                                 highlightbackground="#003050",
-                                 font=("Courier", 11))
+        self._pvar   = tk.StringVar()
+        self._pentry = tk.Entry(
+            fr, textvariable=self._pvar,
+            bg="#040c18", fg="#00BFFF",
+            insertbackground="#00BFFF",
+            selectbackground="#003850",
+            relief="flat", highlightthickness=1,
+            highlightcolor="#00BFFF",
+            highlightbackground="#003050",
+            font=("Courier", 11)
+        )
         self._pentry.pack(side="left", fill="x", expand=True, ipady=7)
         self._pentry.bind("<Return>", lambda e: self._enviar_texto())
         self._pentry.bind("<Escape>", lambda e: self._toggle_painel())
 
-        tk.Button(fr, text="►", bg="#003050", fg="#00BFFF",
-                  activebackground="#005070", relief="flat", bd=0,
-                  font=("Courier", 11, "bold"), cursor="hand2",
-                  command=self._enviar_texto).pack(side="left", padx=(4,0), ipady=7)
+        tk.Button(
+            fr, text="►", bg="#003050", fg="#00BFFF",
+            activebackground="#005070", relief="flat", bd=0,
+            font=("Courier", 11, "bold"), cursor="hand2",
+            command=self._enviar_texto
+        ).pack(side="left", padx=(4, 0), ipady=7)
 
         p.update_idletasks()
+        p.lift()
         self._pentry.focus_force()
+        try:
+            import subprocess as _sp
+            wid = str(p.winfo_id())
+            _sp.Popen(["xdotool", "windowfocus", "--sync", wid],
+                      stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+        except Exception:
+            pass
 
     def _enviar_texto(self):
         try:
@@ -909,6 +947,11 @@ class JarvisHUD(ctk.CTk):
         self.push_historico(texto)
         self.safe_update("ativo", "TEXTO", texto[:32])
         log.info(f"TEXTO: {texto}")
+        # Mantém foco no campo para permitir múltiplos envios
+        try:
+            self._pentry.focus_force()
+        except Exception:
+            pass
         if hasattr(self, "_processador"):
             threading.Thread(target=self._processador, args=(texto,), daemon=True).start()
 
@@ -916,6 +959,24 @@ class JarvisHUD(ctk.CTk):
 def registrar_atalho(hud: JarvisHUD):
     import signal
     signal.signal(signal.SIGUSR1, lambda s, f: hud.toggle_visibilidade())
+
+    # Ctrl+Shift+J para ocultar/mostrar — funciona globalmente via pynput
+    def _hotkey_listener():
+        try:
+            from pynput import keyboard as kb
+            hotkey = kb.HotKey(
+                kb.HotKey.parse("<ctrl>+<shift>+j"),
+                lambda: hud.after(0, hud.toggle_visibilidade)
+            )
+            with kb.Listener(
+                on_press=hotkey.press,
+                on_release=hotkey.release
+            ) as listener:
+                listener.join()
+        except Exception as e:
+            log.warning(f"Hotkey Ctrl+Shift+J indisponível: {e}")
+
+    threading.Thread(target=_hotkey_listener, daemon=True).start()
 
 
 # ═══════════════════════════════════════════════════════════
