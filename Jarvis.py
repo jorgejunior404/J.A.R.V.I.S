@@ -23,6 +23,8 @@ Variáveis no .env:
 # ═══════════════════════════════════════════════════════════
 import os, re, json, base64, math, time, datetime
 import logging, subprocess, threading, urllib.request, urllib.parse
+import imaplib, email
+from email.header import decode_header
 from collections import deque
 from difflib import SequenceMatcher
 
@@ -59,6 +61,9 @@ WAKE_WORD          = os.getenv("WAKE_WORD",  "jarvis")
 WEATHER_KEY        = os.getenv("WEATHER_API_KEY", "")
 DISCORD_TOKEN      = os.getenv("DISCORD_TOKEN", "")
 DISCORD_CHANNEL_ID = int(os.getenv("DISCORD_CHANNEL_ID", "0") or "0")
+EMAIL_USER         = os.getenv("EMAIL_USER", "")
+EMAIL_PASS         = os.getenv("EMAIL_PASS", "")
+EMAIL_IMAP         = os.getenv("EMAIL_IMAP", "imap.gmail.com")
 
 logging.basicConfig(
     filename="jarvis.log", level=logging.INFO,
@@ -355,6 +360,79 @@ def notificar(titulo: str, corpo: str):
         subprocess.run(["notify-send", "-t", "5000", titulo, corpo], capture_output=True)
     except Exception:
         pass
+
+
+# ═══════════════════════════════════════════════════════════
+#  E-MAIL  (IMAP)
+# ═══════════════════════════════════════════════════════════
+
+def _decodificar_header(valor: str) -> str:
+    """Decodifica cabeçalho de e-mail (suporta UTF-8, latin-1, etc.)."""
+    partes = decode_header(valor or "")
+    resultado = []
+    for parte, charset in partes:
+        if isinstance(parte, bytes):
+            resultado.append(parte.decode(charset or "utf-8", errors="replace"))
+        else:
+            resultado.append(parte)
+    return " ".join(resultado)
+
+def ler_emails(quantidade: int = 5, pasta: str = "INBOX", filtro_remetente: str = None) -> str:
+    """
+    Lê os últimos `quantidade` e-mails e retorna quem enviou cada um.
+    Se `filtro_remetente` for informado, busca apenas e-mails desse remetente.
+    Retorna texto pronto para ser falado pelo JARVIS.
+    """
+    if not EMAIL_USER or not EMAIL_PASS:
+        return "E-mail não configurado. Adicione EMAIL_USER e EMAIL_PASS no arquivo .env, senhor."
+    try:
+        imap = imaplib.IMAP4_SSL(EMAIL_IMAP, timeout=10)
+        imap.login(EMAIL_USER, EMAIL_PASS)
+        imap.select(pasta)
+
+        # Se tiver filtro, busca por remetente; senão pega todos
+        if filtro_remetente:
+            status, dados = imap.search(None, f'FROM "{filtro_remetente}"')
+        else:
+            status, dados = imap.search(None, "ALL")
+
+        if status != "OK" or not dados[0]:
+            imap.logout()
+            if filtro_remetente:
+                return f"Não encontrei e-mails de {filtro_remetente}, senhor."
+            return "Não encontrei e-mails na caixa de entrada, senhor."
+
+        ids = dados[0].split()
+        recentes = ids[-quantidade:][::-1]  # mais recentes primeiro
+
+        linhas = []
+        for uid in recentes:
+            status, msg_data = imap.fetch(uid, "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE)])")
+            if status != "OK":
+                continue
+            msg = email.message_from_bytes(msg_data[0][1])
+            remetente = _decodificar_header(msg.get("From", "desconhecido"))
+            assunto   = _decodificar_header(msg.get("Subject", "sem assunto"))
+            nome_email = re.sub(r"\s*<[^>]+>", "", remetente).strip() or remetente
+            linhas.append(f"{nome_email}: {assunto}")
+
+        imap.logout()
+
+        if not linhas:
+            return "Não consegui ler os e-mails agora, senhor."
+
+        if filtro_remetente:
+            intro = f"Senhor, encontrei {len(linhas)} e-mail{'s' if len(linhas) > 1 else ''} de {filtro_remetente}. "
+        else:
+            intro = f"Senhor, aqui estão os {len(linhas)} e-mails mais recentes. "
+        return intro + ". ".join(linhas) + "."
+
+    except imaplib.IMAP4.error as e:
+        log.error(f"IMAP auth: {e}")
+        return "Falha de autenticação no e-mail. Verifique suas credenciais, senhor."
+    except Exception as e:
+        log.error(f"ler_emails: {e}")
+        return "Não consegui acessar o e-mail agora, senhor."
 
 
 # ═══════════════════════════════════════════════════════════
@@ -1106,6 +1184,36 @@ def processar_comando(comando: str, hud: "JarvisHUD"):
         falar_sync("O que devo enviar, senhor?")
         msg = ouvir_pergunta(timeout=8, limite=30)
         falar(discord_enviar(msg) if msg else "Não captei a mensagem.")
+
+    # ── E-mail ────────────────────────────────────────
+    elif any(p in comando for p in ["ler email", "checar email", "verificar email",
+                                     "novos emails", "meus emails", "caixa de entrada"]):
+        hud.safe_update("ia", "E-MAIL", "Conectando...")
+
+        # Detecta filtro por remetente: "ler email do João" / "email de maria"
+        filtro = None
+        m_filtro = re.search(r"\b(?:do|da|de)\s+(.+)$", comando)
+        if m_filtro:
+            # Remove palavras-chave do comando para isolar o nome/email
+            filtro = re.sub(
+                r"jarvis|ler|checar|verificar|novos|meus|email[s]?|caixa de entrada",
+                "", m_filtro.group(1)
+            ).strip()
+
+        qtd = 5
+        nums = [int(w) for w in comando.split() if w.isdigit()]
+        if nums:
+            qtd = min(nums[0], 10)
+
+        if filtro:
+            falar_sync(f"Buscando e-mails de {filtro}, um momento.")
+            hud.safe_update("ia", "E-MAIL", filtro[:15])
+        else:
+            falar_sync("Verificando sua caixa de entrada, um momento.")
+
+        resultado = ler_emails(quantidade=qtd, filtro_remetente=filtro)
+        hud.safe_update("ia", "E-MAIL", f"{qtd} lidos")
+        falar(resultado)
 
     # ── Playerctl (música) ────────────────────────────
     elif any(p in comando for p in ["pausar", "parar musica"]):
