@@ -4,3 +4,6 @@ venv
 vosk-model-small-pt-0.3
 vosk-model-small-pt-0.3.zip
 .venv
+credentials.json
+.env.save
+.env
