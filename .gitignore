@@ -7,3 +7,6 @@ vosk-model-small-pt-0.3.zip
 credentials.json
 .env.save
 .env
+__pycache__/
+*.pyc
+jarvis.log
