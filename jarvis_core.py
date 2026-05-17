@@ -1,32 +1,32 @@
 """
 ╔══════════════════════════════════════════════════════════╗
-║         J.A.R.V.I.S  —  MARK XII  ·  CORE               ║
-║  Microfone · TTS · IA · Automações · Integrações         ║
-║  + Análise Contextual de Tela com Sugestões Proativas    ║
+║         J.A.R.V.I.S  —  MARK XIII  ·  CORE              ║
+║  Mais humano · Proativo · NLU flexível · Com humor       ║
 ╚══════════════════════════════════════════════════════════╝
 
-Não execute este arquivo diretamente.
 Execute: python jarvis_hud.py
 
 Variáveis no .env:
-    GEMINI_API_KEY         = sua_chave
-    VOZ                    = pt-BR-AntonioNeural
-    PITCH                  = 0.91
-    WAKE_WORD              = jarvis
-    WEATHER_API_KEY        = chave_openweathermap
-    DISCORD_TOKEN          = token_do_bot
-    DISCORD_CHANNEL_ID     = id_do_canal
-    EMAIL_USER             = seu@email.com
-    EMAIL_PASS             = sua_senha
-    EMAIL_IMAP             = imap.gmail.com
-    TELA_MONITOR_INTERVALO = 120   (segundos entre análises automáticas, 0=desativa)
-    TELA_MONITOR_ATIVO     = true  (false para desativar monitor automático)
+    GEMINI_API_KEY          = sua_chave
+    VOZ                     = pt-BR-AntonioNeural
+    PITCH                   = 0.91
+    WAKE_WORD               = jarvis
+    WEATHER_API_KEY         = chave_openweathermap
+    DISCORD_TOKEN           = token_do_bot
+    DISCORD_CHANNEL_ID      = id_do_canal
+    EMAIL_USER              = seu@email.com
+    EMAIL_PASS              = sua_senha
+    EMAIL_IMAP              = imap.gmail.com
+    TELA_MONITOR_INTERVALO  = 90    (segundos entre análises, 0=desativa)
+    TELA_MONITOR_ATIVO      = true
+    JARVIS_NOME_USUARIO     = senhor  (como o JARVIS te chama)
+    JARVIS_HUMOR            = true    (respostas com personalidade)
 """
 
 # ═══════════════════════════════════════════════════════════
 #  IMPORTS
 # ═══════════════════════════════════════════════════════════
-import os, re, json, math, time, datetime
+import os, re, json, math, time, datetime, random
 import logging, subprocess, threading, urllib.request, urllib.parse
 import imaplib, email, base64, hashlib
 from email.header import decode_header
@@ -67,8 +67,10 @@ DISCORD_CHANNEL_ID     = int(os.getenv("DISCORD_CHANNEL_ID", "0") or "0")
 EMAIL_USER             = os.getenv("EMAIL_USER", "")
 EMAIL_PASS             = os.getenv("EMAIL_PASS", "")
 EMAIL_IMAP             = os.getenv("EMAIL_IMAP", "imap.gmail.com")
-TELA_MONITOR_INTERVALO = int(os.getenv("TELA_MONITOR_INTERVALO", "120"))
+TELA_MONITOR_INTERVALO = int(os.getenv("TELA_MONITOR_INTERVALO", "90"))
 TELA_MONITOR_ATIVO     = os.getenv("TELA_MONITOR_ATIVO", "true").lower() == "true"
+USUARIO                = os.getenv("JARVIS_NOME_USUARIO", "senhor")
+HUMOR_ATIVO            = os.getenv("JARVIS_HUMOR", "true").lower() == "true"
 
 logging.basicConfig(
     filename="jarvis.log", level=logging.INFO,
@@ -78,11 +80,79 @@ log = logging.getLogger("JARVIS")
 
 
 # ═══════════════════════════════════════════════════════════
+#  PERSONALIDADE — frases, reações e humor do JARVIS
+# ═══════════════════════════════════════════════════════════
+
+# Frases de reação situacional — o JARVIS fala espontaneamente em certos momentos
+_REACOES = {
+    "erro_codigo": [
+        f"Ah, um erro. A vida de desenvolvedor, {USUARIO}.",
+        f"Clássico. Linha errada, mundo errado.",
+        f"Esse erro e eu já nos conhecemos bem. Quer que eu ajude a resolver?",
+        f"Interessante escolha de bug, {USUARIO}. Posso sugerir uma solução?",
+    ],
+    "youtube": [
+        f"Pausa produtiva ou procrastinação estratégica, {USUARIO}?",
+        f"YouTube detectado. Relógio também ligado, por precaução.",
+        f"Conteúdo técnico ou entretenimento puro? Curiosidade profissional minha.",
+    ],
+    "terminal": [
+        f"Terminal aberto. Vou ficar de olho por se precisar de algo.",
+        f"Ah, o ambiente natural do desenvolvedor. Me avise se travar.",
+        f"Terminal ativo. Se der um erro bizarro, é só chamar.",
+    ],
+    "spotify": [
+        f"Boa escolha de trilha sonora, {USUARIO}.",
+        f"Música ativada. Produtividade tende a subir agora.",
+        f"Spotify detectado. Posso pausar se você precisar focar.",
+    ],
+    "github": [
+        f"Commitando ou só olhando o trabalho dos outros, {USUARIO}?",
+        f"GitHub aberto. Boas contribuições por aí?",
+    ],
+    "inatividade": [
+        f"Tudo bem por aí, {USUARIO}? Posso fazer algo enquanto você pensa.",
+        f"Silêncio estratégico ou pausa para o café? Estou disponível.",
+        f"Aqui no standby, {USUARIO}. Me chame quando precisar.",
+    ],
+    "cpu_alta": [
+        f"CPU acima de 85%, {USUARIO}. Algo pesado está rodando — quer verificar?",
+        f"O processador está trabalhando mais que eu. Posso verificar o que está consumindo?",
+    ],
+    "bateria_baixa": [
+        f"Bateria em 15%, {USUARIO}. Seria prudente conectar o carregador.",
+        f"Alerta de bateria. Já vi esse filme antes — nem sempre termina bem.",
+    ],
+}
+
+def _frase_reacao(tipo: str) -> str:
+    """Retorna uma frase aleatória de reação para o tipo dado."""
+    opcoes = _REACOES.get(tipo, [])
+    if not opcoes:
+        return ""
+    return random.choice(opcoes)
+
+# Variações de confirmação — em vez de sempre dizer "Ok, senhor"
+_CONFIRMACOES = [
+    f"Feito, {USUARIO}.",
+    f"Considerado.",
+    f"Imediatamente.",
+    f"Executando.",
+    f"Pronto.",
+    f"Claro, {USUARIO}.",
+    f"Já providencio.",
+]
+
+def _confirmar() -> str:
+    return random.choice(_CONFIRMACOES)
+
+
+# ═══════════════════════════════════════════════════════════
 #  MICROFONE
 # ═══════════════════════════════════════════════════════════
 rec = sr.Recognizer()
-rec.pause_threshold          = 0.5   # ⚡ era 0.8 — detecta fim de fala mais rápido
-rec.non_speaking_duration    = 0.4   # ⚡ corta silêncio antes de enviar
+rec.pause_threshold          = 0.6
+rec.non_speaking_duration    = 0.4
 rec.dynamic_energy_threshold = True
 mic = sr.Microphone()
 
@@ -112,26 +182,28 @@ def ouvir_pergunta(timeout=10, limite=30) -> str:
     except Exception as e:
         log.error(f"ouvir_pergunta: {e}"); return ""
 
-def contem_wake_word(texto: str, limiar=0.75) -> bool:
-    return any(
-        SequenceMatcher(None, WAKE_WORD, w).ratio() > limiar
-        for w in texto.split()
-    )
+def contem_wake_word(texto: str, limiar=0.72) -> bool:
+    """Tolerante a variações: 'jarvis', 'jarvi', 'jarwis', etc."""
+    palavras = texto.split()
+    for w in palavras:
+        if SequenceMatcher(None, WAKE_WORD, w).ratio() > limiar:
+            return True
+    # Também aceita no meio da frase sem separação clara
+    if WAKE_WORD in texto:
+        return True
+    return False
 
 
 # ═══════════════════════════════════════════════════════════
-#  TTS  (edge-tts → ffmpeg em pipeline → mpg123)
-#  ⚡ Otimizado: edge-tts e ffmpeg em pipe direto, sem disco
+#  TTS  (edge-tts → ffmpeg → mpg123)
 # ═══════════════════════════════════════════════════════════
 _fala_thread = None
 _fala_proc   = None
 
 def _gerar_audio(texto: str):
-    """Gera áudio com pitch: edge-tts → ffmpeg em pipe (sem arquivo intermediário)."""
     ts    = int(time.time() * 1000)
     grave = f"/tmp/jv_{ts}_g.mp3"
     try:
-        # edge-tts escreve para stdout, ffmpeg lê do stdin — elimina 1 disco I/O
         p1 = subprocess.Popen(
             ["edge-tts", "--voice", VOZ, "--text", texto, "--write-media", "/dev/stdout"],
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
@@ -141,8 +213,7 @@ def _gerar_audio(texto: str):
             stdin=p1.stdout, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
         )
         p1.stdout.close()
-        p2.wait()
-        p1.wait()
+        p2.wait(); p1.wait()
         return grave
     except Exception as e:
         log.error(f"TTS: {e}")
@@ -155,7 +226,7 @@ def parar_fala():
         _fala_proc.terminate()
 
 def falar(texto: str):
-    """Fala de forma assíncrona (não bloqueia o loop principal)."""
+    """Fala de forma assíncrona."""
     global _fala_thread
     def _run():
         global _fala_proc
@@ -173,7 +244,7 @@ def falar(texto: str):
     _fala_thread.start()
 
 def falar_sync(texto: str):
-    """Fala de forma síncrona (bloqueia até terminar)."""
+    """Fala de forma síncrona."""
     global _fala_proc
     grave = _gerar_audio(texto)
     if not grave:
@@ -186,9 +257,23 @@ def falar_sync(texto: str):
 
 
 # ═══════════════════════════════════════════════════════════
-#  IA  (Gemini)
+#  IA  (Gemini) — com memória de conversa e personalidade
 # ═══════════════════════════════════════════════════════════
-_cliente_ia = None
+_cliente_ia  = None
+_historico   = deque(maxlen=12)   # últimas 12 trocas — contexto de conversa
+
+# Prompt de sistema — define a personalidade do JARVIS
+_SYSTEM_PROMPT = f"""Você é J.A.R.V.I.S, assistente pessoal de IA de um desenvolvedor brasileiro.
+Sua personalidade:
+- Inteligente, direto e levemente bem-humorado — como um colega experiente, não um robô.
+- Faz comentários espirituosos ocasionais mas nunca perde o foco na tarefa.
+- Usa o nome "{USUARIO}" naturalmente, sem exagerar.
+- Respostas conversacionais: sem asteriscos, sem markdown, sem tópicos com bullet points.
+- Quando guiar o usuário em tarefas, faz passo a passo em linguagem natural, não em lista.
+- Se não sabe algo, admite com leveza. Se algo é difícil, reconhece. Nunca é condescendente.
+- Máximo 3 frases por resposta padrão, a menos que esteja guiando uma tarefa longa.
+- Fala português brasileiro natural — não "computadorês"."""
+
 try:
     _cliente_ia = genai.Client(api_key=GEMINI_KEY)
     log.info("Gemini inicializado.")
@@ -196,38 +281,61 @@ except Exception as e:
     log.warning(f"Gemini offline: {e}")
 
 def limpar_historico():
-    pass  # sem histórico — cada chamada é independente
+    _historico.clear()
 
-def consultar_ia(prompt: str, curto=False, imagem_path: str = None) -> str:
+def _montar_conversa(prompt: str) -> list:
+    """Monta o histórico de conversa para enviar ao Gemini."""
+    msgs = []
+    for entrada, saida in _historico:
+        msgs.append({"role": "user",  "parts": [{"text": entrada}]})
+        msgs.append({"role": "model", "parts": [{"text": saida}]})
+    msgs.append({"role": "user", "parts": [{"text": prompt}]})
+    return msgs
+
+def consultar_ia(prompt: str, curto=False, sistema: str = None) -> str:
     if not _cliente_ia:
-        return "Gemini não configurado, senhor."
+        return f"Gemini não configurado, {USUARIO}."
     modelos  = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
-    modo     = "muito curto, máximo 2 frases" if curto else "detalhado mas objetivo"
-    conteudo = f"Responda como o JARVIS, {modo}: {prompt}"
+    sys_text = sistema or _SYSTEM_PROMPT
+    if curto:
+        sys_text += "\nREGRA: resposta em no máximo 2 frases curtas."
+
+    # Monta prompt com contexto de sistema
+    prompt_completo = f"{sys_text}\n\n{prompt}"
+
     for modelo in modelos:
         for tentativa in range(2):
             try:
-                resp = _cliente_ia.models.generate_content(model=modelo, contents=conteudo)
-                return resp.text.strip() if resp and resp.text else "Sem resposta."
+                # Usa histórico de conversa se disponível
+                if _historico:
+                    conteudo = _montar_conversa(f"{sys_text}\n\n{prompt}")
+                    resp = _cliente_ia.models.generate_content(
+                        model=modelo, contents=conteudo)
+                else:
+                    resp = _cliente_ia.models.generate_content(
+                        model=modelo, contents=prompt_completo)
+
+                texto = (resp.text or "").strip()
+                if texto:
+                    _historico.append((prompt, texto))
+                    return texto
+                return "Sem resposta."
             except Exception as e:
                 log.warning(f"IA [{modelo}] tentativa {tentativa+1}: {e}")
-                time.sleep(2)
-    return "Todos os modelos indisponíveis no momento, senhor."
+                time.sleep(1.5)
+    return f"Todos os modelos indisponíveis agora, {USUARIO}."
 
 def consultar_ia_com_imagem(prompt: str, imagem_path: str) -> str:
-    """Envia imagem + prompt para o Gemini Vision e retorna a resposta."""
     if not _cliente_ia:
-        return "Gemini não configurado, senhor."
+        return f"Gemini não configurado, {USUARIO}."
     if not os.path.exists(imagem_path):
         return "Imagem não encontrada para análise."
     try:
         with open(imagem_path, "rb") as f:
             img_bytes = f.read()
-
         from google.genai import types as gtypes
         image_part = gtypes.Part.from_bytes(data=img_bytes, mime_type="image/png")
         text_part  = gtypes.Part.from_text(text=prompt)
-
         modelos = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
         for modelo in modelos:
             for tentativa in range(2):
@@ -236,14 +344,14 @@ def consultar_ia_com_imagem(prompt: str, imagem_path: str) -> str:
                         model=modelo,
                         contents=[gtypes.Content(parts=[image_part, text_part])]
                     )
-                    return resp.text.strip() if resp and resp.text else "Sem resposta da IA."
+                    return (resp.text or "").strip() or "Sem resposta da IA."
                 except Exception as e:
                     log.warning(f"IA imagem [{modelo}] tentativa {tentativa+1}: {e}")
-                    time.sleep(2)
-        return "Todos os modelos indisponíveis para visão, senhor."
+                    time.sleep(1.5)
+        return f"Todos os modelos de visão indisponíveis, {USUARIO}."
     except Exception as e:
         log.error(f"IA com imagem erro: {e}")
-        return "Falha na análise visual, senhor."
+        return f"Falha na análise visual, {USUARIO}."
 
 
 # ═══════════════════════════════════════════════════════════
@@ -258,14 +366,21 @@ APPS = {
     "terminal":      ["x-terminal-emulator"],
     "gerenciador":   ["nautilus"],
     "calculadora":   ["gnome-calculator"],
+    "discord":       ["discord"],
+    "telegram":      ["telegram-desktop"],
+    "slack":         ["slack"],
+    "obs":           ["obs"],
+    "gimp":          ["gimp"],
+    "vlc":           ["vlc"],
 }
 
 def abrir_app(comando: str) -> str:
     for nome, cmd in APPS.items():
         if nome in comando:
             subprocess.Popen(cmd)
-            return f"Abrindo {nome}."
-    return "Não reconheci o aplicativo, senhor."
+            reacao = _frase_reacao(nome) if nome in _REACOES else f"Abrindo {nome}."
+            return reacao or f"Abrindo {nome}."
+    return f"Não reconheci o aplicativo, {USUARIO}. Pode falar o nome exato?"
 
 def tirar_screenshot() -> str:
     ts   = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -278,23 +393,6 @@ def tirar_screenshot() -> str:
         return dest
     except Exception as e:
         log.error(f"screenshot: {e}"); return ""
-
-def analisar_tela() -> str:
-    """Análise simples (legado) — descreve o que está na tela."""
-    if not _PIL_OK:
-        return "Pillow não instalado para captura de tela."
-    try:
-        path = f"/tmp/screen_{int(time.time())}.png"
-        ImageGrab.grab().save(path)
-        resp = consultar_ia_com_imagem(
-            "Descreva o que está na tela e identifique o que o usuário está fazendo.",
-            path
-        )
-        os.remove(path)
-        return resp
-    except Exception as e:
-        log.error(f"analisar_tela: {e}")
-        return "Não consegui analisar a tela, senhor."
 
 def digitar_texto(texto: str):
     if _PYAUTO_OK:
@@ -314,7 +412,8 @@ def listar_processos() -> str:
     procs = sorted(
         psutil.process_iter(["name", "cpu_percent"]),
         key=lambda p: p.info["cpu_percent"] or 0, reverse=True)[:5]
-    return ", ".join(f"{p.info['name']}({p.info['cpu_percent']:.0f}%)" for p in procs)
+    return ", ".join(
+        f"{p.info['name']}({p.info['cpu_percent']:.0f}%)" for p in procs)
 
 def mover_janela(direcao: str):
     try:
@@ -345,9 +444,10 @@ def executar_script(caminho: str) -> str:
 
 def calcular(expr: str):
     try:
-        if not all(c in "0123456789 +-*/().%^" for c in expr):
+        limpo = re.sub(r"[^0-9 +\-*/().%^]", "", expr)
+        if not limpo.strip():
             return None
-        return eval(expr.replace("^", "**"), {"__builtins__": {}})
+        return eval(limpo.replace("^", "**"), {"__builtins__": {}})
     except Exception:
         return None
 
@@ -357,7 +457,8 @@ def calcular(expr: str):
 # ═══════════════════════════════════════════════════════════
 def obter_clima(cidade: str) -> str:
     if not WEATHER_KEY:
-        return consultar_ia(f"Clima em {cidade} hoje? Resumido.", curto=True)
+        return consultar_ia(
+            f"Como está o clima em {cidade} hoje? Responda em 1 frase.", curto=True)
     try:
         url = (f"https://api.openweathermap.org/data/2.5/weather"
                f"?q={urllib.parse.quote(cidade)}&appid={WEATHER_KEY}"
@@ -369,11 +470,12 @@ def obter_clima(cidade: str) -> str:
         umid = d["main"]["humidity"]
         return f"Em {cidade}: {desc}, {temp:.0f} graus, umidade {umid}%."
     except Exception as e:
-        log.error(f"clima: {e}"); return "Não consegui obter o clima agora."
+        log.error(f"clima: {e}")
+        return f"Não consegui o clima agora, {USUARIO}."
 
 def discord_enviar(mensagem: str) -> str:
     if not (DISCORD_TOKEN and DISCORD_CHANNEL_ID):
-        return "Discord não configurado no .env"
+        return "Discord não configurado no .env."
     try:
         url  = f"https://discord.com/api/v10/channels/{DISCORD_CHANNEL_ID}/messages"
         data = json.dumps({"content": mensagem}).encode()
@@ -382,13 +484,14 @@ def discord_enviar(mensagem: str) -> str:
             "Content-Type":  "application/json",
         })
         urllib.request.urlopen(req, timeout=5)
-        return "Mensagem enviada no Discord, senhor."
+        return f"Enviado no Discord, {USUARIO}."
     except Exception as e:
-        log.error(f"Discord: {e}"); return "Falha ao enviar no Discord."
+        log.error(f"Discord: {e}")
+        return "Falha ao enviar no Discord."
 
 def notificar(titulo: str, corpo: str):
     try:
-        subprocess.run(["notify-send", "-t", "5000", titulo, corpo], capture_output=True)
+        subprocess.run(["notify-send", "-t", "6000", titulo, corpo], capture_output=True)
     except Exception:
         pass
 
@@ -409,7 +512,7 @@ def _decodificar_header(valor: str) -> str:
 def ler_emails(quantidade: int = 5, pasta: str = "INBOX",
                filtro_remetente: str = None) -> str:
     if not EMAIL_USER or not EMAIL_PASS:
-        return "E-mail não configurado. Adicione EMAIL_USER e EMAIL_PASS no .env, senhor."
+        return f"E-mail não configurado no .env, {USUARIO}."
     try:
         imap = imaplib.IMAP4_SSL(EMAIL_IMAP, timeout=10)
         imap.login(EMAIL_USER, EMAIL_PASS)
@@ -420,40 +523,39 @@ def ler_emails(quantidade: int = 5, pasta: str = "INBOX",
             status, dados = imap.search(None, "ALL")
         if status != "OK" or not dados[0]:
             imap.logout()
-            return (f"Não encontrei e-mails de {filtro_remetente}, senhor."
+            return (f"Nada de {filtro_remetente} por aqui, {USUARIO}."
                     if filtro_remetente else
-                    "Não encontrei e-mails na caixa de entrada, senhor.")
-        ids = dados[0].split()
+                    f"Caixa de entrada vazia, {USUARIO}.")
+        ids     = dados[0].split()
         recentes = ids[-quantidade:][::-1]
-        linhas = []
+        linhas  = []
         for uid in recentes:
             status, msg_data = imap.fetch(uid, "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE)])")
             if status != "OK": continue
-            msg = email.message_from_bytes(msg_data[0][1])
+            msg        = email.message_from_bytes(msg_data[0][1])
             remetente  = _decodificar_header(msg.get("From", "desconhecido"))
             assunto    = _decodificar_header(msg.get("Subject", "sem assunto"))
             nome_email = re.sub(r"\s*<[^>]+>", "", remetente).strip() or remetente
             linhas.append(f"{nome_email}: {assunto}")
         imap.logout()
         if not linhas:
-            return "Não consegui ler os e-mails agora, senhor."
-        intro = (f"Senhor, encontrei {len(linhas)} e-mail(s) de {filtro_remetente}. "
+            return f"Não consegui ler os e-mails agora, {USUARIO}."
+        intro = (f"Encontrei {len(linhas)} e-mail(s) de {filtro_remetente}. "
                  if filtro_remetente else
-                 f"Senhor, aqui estão os {len(linhas)} e-mails mais recentes. ")
+                 f"Aqui estão os {len(linhas)} e-mails mais recentes. ")
         return intro + ". ".join(linhas) + "."
     except imaplib.IMAP4.error as e:
         log.error(f"IMAP auth: {e}")
-        return "Falha de autenticação no e-mail. Verifique suas credenciais, senhor."
+        return f"Falha de autenticação no e-mail, {USUARIO}. Credenciais no .env corretas?"
     except Exception as e:
         log.error(f"ler_emails: {e}")
-        return "Não consegui acessar o e-mail agora, senhor."
+        return f"Não consegui acessar o e-mail agora, {USUARIO}."
 
 
 # ═══════════════════════════════════════════════════════════
 #  EVENTOS / CONTAGEM REGRESSIVA
 # ═══════════════════════════════════════════════════════════
 ARQUIVO_EVENTOS = os.path.expanduser("~/.jarvis_eventos.json")
-
 MESES_PT = {
     "janeiro": 1, "fevereiro": 2, "março": 3, "marco": 3,
     "abril": 4, "maio": 5, "junho": 6, "julho": 7,
@@ -492,14 +594,12 @@ def ev_adicionar(nome: str, dia: int, mes: int, ano: int = None):
     eventos = _ev_carregar()
     eventos[nome.lower()] = {"dia": dia, "mes": mes, "ano": ano}
     _ev_salvar(eventos)
-    log.info(f"Evento adicionado: {nome} {dia}/{mes}/{ano}")
 
 def ev_remover(nome: str) -> bool:
     eventos = _ev_carregar()
     if nome.lower() in eventos:
         del eventos[nome.lower()]
         _ev_salvar(eventos)
-        log.info(f"Evento removido: {nome}")
         return True
     return False
 
@@ -523,10 +623,19 @@ def ev_listar() -> list:
     return sorted(resultado, key=lambda x: x["faltam"])
 
 def ev_frase(nome: str, faltam: int) -> str:
-    if faltam == 0:   return f"Hoje é o dia de {nome}, senhor!"
-    elif faltam == 1: return f"Falta apenas 1 dia para {nome}, senhor."
-    elif faltam < 0:  return f"{nome} já passou há {abs(faltam)} dias, senhor."
-    else:             return f"Faltam {faltam} dias para {nome}, senhor."
+    if faltam == 0:
+        return random.choice([
+            f"Hoje é o dia de {nome}, {USUARIO}!",
+            f"{nome.title()} é hoje! Não esquece.",
+        ])
+    elif faltam == 1:
+        return f"Amanhã é {nome}, {USUARIO}. Aviso dado."
+    elif faltam < 0:
+        return f"{nome.title()} já passou faz {abs(faltam)} dias."
+    elif faltam <= 7:
+        return f"{nome.title()} em {faltam} dias — semana que vem basicamente."
+    else:
+        return f"Faltam {faltam} dias para {nome}."
 
 def ev_extrair_data_e_nome(comando: str):
     m_dia = re.search(r"\bdia\s+(\d{1,2})\b", comando)
@@ -542,130 +651,187 @@ def ev_extrair_data_e_nome(comando: str):
 
 def ev_anunciar_iniciais(hud, falar_fn):
     eventos = ev_listar()
-    if not eventos: return
+    if not eventos:
+        return
+
     hud.safe_update("foco", "AGENDA", f"{len(eventos)} eventos")
-    for ev in eventos:
-        falar_fn(ev_frase(ev["nome"], ev["faltam"]))
+    urgentes = [e for e in eventos if 0 <= e["faltam"] <= 7]
+
+    if urgentes:
+        # Tem evento próximo — avisa com destaque
+        falar_fn(f"Agenda: {len(urgentes)} evento(s) na próxima semana.")
+        for ev in urgentes:
+            falar_fn(ev_frase(ev["nome"], ev["faltam"]))
+        # Se há mais eventos além dos urgentes, menciona brevemente
+        demais = [e for e in eventos if e["faltam"] > 7]
+        if demais:
+            falar_fn(f"Além disso, {len(demais)} evento(s) mais pra frente na agenda.")
+    else:
+        # Nenhum urgente, mas fala todos mesmo assim
+        falar_fn(f"Agenda: {len(eventos)} evento(s) cadastrado(s).")
+        for ev in eventos:
+            falar_fn(ev_frase(ev["nome"], ev["faltam"]))
 
 def ev_buscar_por_voz(comando: str, eventos: list) -> dict:
     for ev in eventos:
-        if ev["nome"] in comando: return ev
+        if ev["nome"] in comando:
+            return ev
     return None
 
 
 # ═══════════════════════════════════════════════════════════
-#  ANÁLISE CONTEXTUAL DE TELA  ← SISTEMA INTELIGENTE
+#  GUIA PASSO A PASSO — JARVIS como co-piloto de tarefas
 # ═══════════════════════════════════════════════════════════
+_tarefa_ativa = None   # dict: {titulo, passos, passo_atual, contexto}
 
-# Estado do monitor de tela
-_monitor_ativo   = False
-_ultimo_hash     = ""
-_ultima_analise  = 0.0
-_sugestoes_cache = []
-_ultimo_contexto = {}   # guarda o último contexto rico para comparação
+def iniciar_guia(titulo: str, descricao_tarefa: str, hud) -> str:
+    """
+    Usa a IA para gerar um guia passo a passo para uma tarefa longa.
+    O JARVIS acompanha cada etapa com o usuário.
+    """
+    global _tarefa_ativa
 
-# ── Prompt de extração de contexto rico ─────────────────
-# Primeira passagem: extrair FATOS concretos da tela
+    prompt = (
+        f"O usuário quer: '{descricao_tarefa}'. "
+        f"Crie um guia de no máximo 6 passos numerados, em português natural. "
+        f"Cada passo deve ser uma instrução clara em 1 frase. "
+        f"Responda APENAS os passos numerados, sem introdução."
+    )
+    guia_texto = consultar_ia(prompt, curto=False)
+
+    # Extrai os passos numerados
+    passos = re.findall(r"\d+[\.\)]\s*(.+)", guia_texto)
+    if not passos:
+        # Fallback: divide por linhas
+        passos = [l.strip() for l in guia_texto.split("\n") if l.strip()]
+
+    if not passos:
+        return f"Não consegui montar um guia para essa tarefa, {USUARIO}."
+
+    _tarefa_ativa = {
+        "titulo":      titulo or descricao_tarefa[:30],
+        "passos":      passos,
+        "passo_atual": 0,
+        "contexto":    descricao_tarefa,
+    }
+
+    hud.safe_update("foco", "GUIA ATIVO", _tarefa_ativa["titulo"][:20])
+    total = len(passos)
+    falar_sync(f"Montei um guia de {total} passos para {titulo or 'essa tarefa'}.")
+    _falar_proximo_passo(hud)
+    return ""
+
+def _falar_proximo_passo(hud):
+    global _tarefa_ativa
+    if not _tarefa_ativa:
+        return
+    i      = _tarefa_ativa["passo_atual"]
+    passos = _tarefa_ativa["passos"]
+    total  = len(passos)
+
+    if i >= total:
+        _tarefa_ativa = None
+        hud.safe_update(False, "STANDBY", "Tarefa concluída")
+        falar(f"Guia concluído, {USUARIO}. Todos os passos executados.")
+        return
+
+    passo = passos[i]
+    hud.safe_update("foco", f"PASSO {i+1}/{total}", passo[:25])
+    falar_sync(f"Passo {i+1} de {total}: {passo}")
+    falar_sync("Me avise quando terminar ou se precisar de ajuda.")
+
+def avancar_passo(hud):
+    global _tarefa_ativa
+    if not _tarefa_ativa:
+        falar(f"Não há guia ativo no momento, {USUARIO}.")
+        return
+    _tarefa_ativa["passo_atual"] += 1
+    _falar_proximo_passo(hud)
+
+def cancelar_guia(hud):
+    global _tarefa_ativa
+    _tarefa_ativa = None
+    hud.safe_update(False, "STANDBY", "Guia cancelado")
+    falar(f"Guia cancelado, {USUARIO}.")
+
+def status_guia() -> str:
+    if not _tarefa_ativa:
+        return ""
+    i     = _tarefa_ativa["passo_atual"]
+    total = len(_tarefa_ativa["passos"])
+    return f"Passo {i+1} de {total}: {_tarefa_ativa['passos'][i]}"
+
+
+# ═══════════════════════════════════════════════════════════
+#  ANÁLISE CONTEXTUAL DE TELA — versão com personalidade
+# ═══════════════════════════════════════════════════════════
+_monitor_ativo    = False
+_ultimo_hash      = ""
+_ultima_analise   = 0.0
+_sugestoes_cache  = []
+_ultimo_contexto  = {}
+_app_em_foco      = ""       # app que o usuário está usando agora
+_ultimo_erro_visto = ""      # último erro detectado na tela
+
 _PROMPT_EXTRACAO = """
-Você é um sistema de visão computacional preciso. Analise esta captura de tela e extraia
-APENAS fatos concretos e observáveis. Seja extremamente específico — leia textos, nomes de
-arquivos, URLs, mensagens de erro, nomes de funções, qualquer texto visível.
+Você é um sistema de visão computacional. Analise esta captura de tela e extraia APENAS fatos
+concretos e observáveis. Leia textos, nomes de arquivos, URLs, erros, nomes de funções visíveis.
 
 Responda SOMENTE em JSON válido, sem markdown.
 
 {
-  "app": "nome exato do aplicativo em foco (ex: VS Code, Firefox, Terminal, Spotify)",
-  "aba_titulo": "título exato da aba ou janela ativa",
-  "url": "URL visível na barra de endereço, ou null",
-  "arquivo_aberto": "nome e extensão do arquivo aberto, ou null (ex: main.py, index.js)",
-  "linguagem": "linguagem de programação detectada, ou null (ex: Python, JavaScript)",
-  "erro_visivel": "mensagem de erro exata se houver alguma visível na tela, ou null",
-  "texto_selecionado": "texto que parece estar selecionado ou em foco, ou null",
-  "ultimo_comando": "último comando digitado no terminal se visível, ou null",
-  "conteudo_resumo": "resumo de 1 frase do que está na tela — específico, com nomes reais",
-  "intencao_provavel": "o que o usuário provavelmente está tentando fazer agora — específico"
+  "app": "nome exato do aplicativo em foco",
+  "aba_titulo": "título exato da aba ou janela",
+  "url": "URL visível ou null",
+  "arquivo_aberto": "nome e extensão do arquivo ou null",
+  "linguagem": "linguagem de programação detectada ou null",
+  "erro_visivel": "mensagem de erro exata se houver ou null",
+  "texto_selecionado": "texto selecionado ou null",
+  "ultimo_comando": "último comando no terminal se visível ou null",
+  "conteudo_resumo": "resumo em 1 frase — específico, com nomes reais",
+  "intencao_provavel": "o que o usuário provavelmente está fazendo — específico"
 }
-
-Exemplos de BOAS respostas:
-- arquivo_aberto: "jarvis_core.py" (não "um arquivo python")
-- erro_visivel: "NameError: name 'falar' is not defined on line 42" (não "tem um erro")
-- aba_titulo: "GitHub - anthropics/anthropic-sdk-python" (não "GitHub")
-- ultimo_comando: "pip install google-genai" (não "um comando pip")
-- intencao_provavel: "corrigir o TypeError na função processar_comando" (não "editar código")
 """
 
-# ── Prompt de geração de sugestões baseado nos fatos ────
-# Segunda passagem: gera sugestões cirúrgicas usando o contexto extraído
-_PROMPT_SUGESTOES = """
-Você é o J.A.R.V.I.S. Com base no contexto concreto abaixo, gere 3 sugestões de ação
-CIRÚRGICAS e ESPECÍFICAS para o que o usuário está fazendo AGORA.
+_PROMPT_SUGESTOES = f"""Você é o J.A.R.V.I.S com personalidade — inteligente, direto e levemente bem-humorado.
+Com base no contexto real abaixo, gere 3 sugestões ESPECÍFICAS para o que o usuário está fazendo AGORA.
 
 CONTEXTO REAL DA TELA:
-{contexto}
+{{contexto}}
 
-REGRAS ABSOLUTAS:
-1. Cada sugestão deve mencionar detalhes REAIS da tela (nome do arquivo, erro específico,
-   URL, função, pacote, etc). NUNCA sugira algo genérico como "rode o código" ou "debug o código".
-2. Se há um erro visível → a sugestão #1 DEVE ser sobre aquele erro específico.
-3. Se há um arquivo aberto → mencione o nome do arquivo na sugestão.
-4. Se há uma URL → sugira algo relacionado àquele site/conteúdo específico.
-5. comando_voz deve ser uma frase natural em português que o JARVIS já sabe executar:
-   pesquisar X, abrir terminal, tirar screenshot, volume 50, pausar música,
-   abrir spotify, abrir chrome, modo foco, etc.
+REGRAS:
+1. Mencione detalhes REAIS (nome do arquivo, erro específico, URL, função, pacote).
+2. Se há erro visível → sugestão 1 DEVE ser sobre aquele erro.
+3. frase_jarvis deve ter personalidade — pode ter um toque de humor leve se o contexto permitir.
+4. comando_voz em português natural que o JARVIS já sabe executar.
 
-Responda SOMENTE em JSON válido, sem markdown:
-{
-  "contexto": "frase curta e específica do que está acontecendo (máx 60 chars)",
+JSON válido, sem markdown:
+{{
+  "contexto": "frase curta e específica (máx 60 chars)",
   "sugestoes": [
-    {
+    {{
       "titulo": "ação específica com detalhe real (máx 45 chars)",
-      "descricao": "o que exatamente será feito — mencione nomes reais (máx 90 chars)",
-      "comando_voz": "comando natural em português para o JARVIS executar"
-    }
+      "descricao": "o que exatamente será feito — nomes reais (máx 90 chars)",
+      "comando_voz": "comando natural em português"
+    }}
   ],
-  "frase_jarvis": "frase do JARVIS mencionando detalhes reais da tela (máx 110 chars)"
-}
-
-EXEMPLOS DE SUGESTÕES BOAS vs RUINS:
-
-Contexto: VS Code com erro "ModuleNotFoundError: No module named 'psutil'" em jarvis_core.py
-  RUIM: {"titulo": "Instalar dependência", "comando_voz": "abrir terminal"}
-  BOM:  {"titulo": "Instalar psutil no terminal", "descricao": "Abrir terminal e rodar pip install psutil para resolver o erro em jarvis_core.py", "comando_voz": "abrir terminal"}
-
-Contexto: YouTube com vídeo "Curso Python - Decorators" pausado em 14:32
-  RUIM: {"titulo": "Pesquisar sobre o vídeo", "comando_voz": "pesquisar python"}
-  BOM:  {"titulo": "Pesquisar exemplos de decorators", "descricao": "Buscar 'python decorators exemplos práticos' para complementar o que está assistindo", "comando_voz": "pesquisar python decorators exemplos práticos"}
-
-Contexto: Terminal com último comando 'git push' retornando erro de autenticação
-  RUIM: {"titulo": "Verificar terminal", "comando_voz": "abrir terminal"}
-  BOM:  {"titulo": "Pesquisar erro de auth no Git", "descricao": "Buscar solução para o erro de autenticação do git push que apareceu no terminal", "comando_voz": "pesquisar git push authentication failed solução"}
-"""
+  "frase_jarvis": "frase com personalidade mencionando o que está na tela (máx 120 chars)"
+}}"""
 
 def _hash_tela(img) -> str:
-    """Hash da imagem reduzida — detecta mudanças visuais reais (não só pixels)."""
     try:
-        # Usa resolução maior para não confundir mudanças pequenas com grandes
         small = img.resize((128, 72))
         return hashlib.md5(small.tobytes()).hexdigest()
     except Exception:
         return ""
 
-def _tela_mudou_significativamente(hash_novo: str, hash_anterior: str) -> bool:
-    """
-    Compara dois hashes. Retorna True se a mudança for considerável.
-    Usa comparação direta — hashes md5 são binários, qualquer diff = mudança.
-    """
-    return hash_novo != hash_anterior
-
 def _capturar_tela_para_analise() -> tuple:
-    """Captura tela, retorna (path, hash). Mantém alta qualidade para leitura de texto."""
     if not _PIL_OK:
         return None, ""
     try:
-        img = ImageGrab.grab()
-        h   = _hash_tela(img)
+        img  = ImageGrab.grab()
+        h    = _hash_tela(img)
         path = f"/tmp/jarvis_ctx_{int(time.time())}.png"
-        # Mantém 1280px de largura — suficiente para ler texto, econômico em tokens
         w, ht = img.size
         if w > 1280:
             nova_altura = int(ht * 1280 / w)
@@ -677,98 +843,64 @@ def _capturar_tela_para_analise() -> tuple:
         return None, ""
 
 def _parsear_json(raw: str) -> dict:
-    """Parseia JSON da resposta, tolerando markdown residual."""
     limpo = re.sub(r"```(?:json)?", "", raw).strip().rstrip("`").strip()
-    # Tenta extrair JSON de dentro de um bloco maior
     m = re.search(r"\{[\s\S]+\}", limpo)
     if m:
         limpo = m.group(0)
     return json.loads(limpo)
 
 def _extrair_contexto_da_tela(path: str) -> dict:
-    """
-    Passagem 1: Lê fatos concretos da tela — textos, erros, URLs, nomes de arquivo.
-    Retorna dict com os fatos extraídos.
-    """
     raw = consultar_ia_com_imagem(_PROMPT_EXTRACAO, path)
     try:
         return _parsear_json(raw)
     except Exception as e:
-        log.error(f"Extração de contexto falhou: {e} | raw: {raw[:300]}")
-        # Fallback mínimo
-        return {
-            "app": "desconhecido",
-            "conteudo_resumo": "tela atual",
-            "intencao_provavel": "uso geral do computador",
-        }
+        log.error(f"Extração de contexto falhou: {e}")
+        return {"app": "desconhecido", "conteudo_resumo": "tela atual",
+                "intencao_provavel": "uso geral"}
 
 def _gerar_sugestoes_do_contexto(ctx: dict) -> dict:
-    """
-    Passagem 2: Usa os fatos extraídos para gerar sugestões cirúrgicas.
-    Recebe o dict de contexto, injeta no prompt e chama a IA (só texto, sem imagem).
-    """
-    # Formata o contexto de forma legível para o prompt
     linhas = []
     mapa = {
-        "app":              "Aplicativo",
-        "aba_titulo":       "Título da janela",
-        "url":              "URL",
-        "arquivo_aberto":   "Arquivo aberto",
-        "linguagem":        "Linguagem",
-        "erro_visivel":     "ERRO VISÍVEL",
-        "texto_selecionado":"Texto selecionado",
-        "ultimo_comando":   "Último comando terminal",
-        "conteudo_resumo":  "O que está na tela",
-        "intencao_provavel":"Intenção provável",
+        "app": "Aplicativo", "aba_titulo": "Título da janela",
+        "url": "URL", "arquivo_aberto": "Arquivo aberto",
+        "linguagem": "Linguagem", "erro_visivel": "ERRO VISÍVEL",
+        "texto_selecionado": "Texto selecionado",
+        "ultimo_comando": "Último comando terminal",
+        "conteudo_resumo": "O que está na tela",
+        "intencao_provavel": "Intenção provável",
     }
     for chave, label in mapa.items():
         val = ctx.get(chave)
         if val and val != "null" and val is not None:
             linhas.append(f"- {label}: {val}")
 
-    contexto_str = "\n".join(linhas) if linhas else "- Tela não identificada claramente"
+    contexto_str = "\n".join(linhas) if linhas else "- Tela não identificada"
     prompt = _PROMPT_SUGESTOES.replace("{contexto}", contexto_str)
-
-    raw = consultar_ia(prompt, curto=False)
+    raw    = consultar_ia(prompt, curto=False)
     try:
         return _parsear_json(raw)
     except Exception as e:
-        log.error(f"Geração de sugestões falhou: {e} | raw: {raw[:300]}")
-        return {"erro": "Não consegui gerar sugestões específicas desta vez."}
+        log.error(f"Geração de sugestões falhou: {e}")
+        return {"erro": "Não consegui gerar sugestões desta vez."}
 
 def analisar_tela_contextual(forcar=False) -> dict:
-    """
-    Análise em 2 passagens:
-      1) Gemini Vision lê os fatos concretos da tela (texto, erros, URLs, arquivos)
-      2) Gemini texto gera sugestões cirúrgicas baseadas nesses fatos reais
-
-    Se a tela não mudou, retorna cache sem chamar a API.
-    """
     global _ultimo_hash, _ultima_analise, _sugestoes_cache, _ultimo_contexto
 
     path, novo_hash = _capturar_tela_para_analise()
     if not path:
         return {"erro": "Pillow não disponível ou falha na captura."}
 
-    # Cache: só re-analisa se a tela mudou de verdade
-    if not forcar and not _tela_mudou_significativamente(novo_hash, _ultimo_hash) and _sugestoes_cache:
+    if (not forcar and novo_hash == _ultimo_hash and _sugestoes_cache):
         os.remove(path)
-        log.info("Tela sem mudança significativa — retornando cache.")
         return {
-            "cache":    True,
-            "contexto": _ultimo_contexto.get("contexto", "última análise"),
-            "sugestoes": _sugestoes_cache,
-            "frase_jarvis": "Aqui estão as sugestões da última análise, senhor.",
+            "cache":       True,
+            "contexto":    _ultimo_contexto.get("contexto", "última análise"),
+            "sugestoes":   _sugestoes_cache,
+            "frase_jarvis": f"Mesma tela de antes, {USUARIO}. Sugestões ainda válidas.",
         }
 
-    log.info("Passagem 1: extraindo contexto real da tela...")
-    ctx = _extrair_contexto_da_tela(path)
+    ctx  = _extrair_contexto_da_tela(path)
     os.remove(path)
-
-    log.info(f"Contexto extraído: app={ctx.get('app')} | "
-             f"erro={ctx.get('erro_visivel')} | arquivo={ctx.get('arquivo_aberto')}")
-
-    log.info("Passagem 2: gerando sugestões cirúrgicas...")
     dados = _gerar_sugestoes_do_contexto(ctx)
 
     if "erro" not in dados:
@@ -777,57 +909,42 @@ def analisar_tela_contextual(forcar=False) -> dict:
         _sugestoes_cache = dados.get("sugestoes", [])
         _ultimo_contexto = dados
 
-        log.info(f"Sugestões geradas: {[s.get('titulo','?') for s in _sugestoes_cache]}")
-
     return dados
 
 def falar_sugestoes(dados: dict, hud=None):
-    """
-    Fala as sugestões do JARVIS e exibe no HUD.
-    """
     if "erro" in dados:
-        falar(f"Não consegui analisar a tela agora, senhor. {dados['erro'][:60]}")
+        falar(f"Não consegui analisar a tela agora. {dados['erro'][:60]}")
         return
 
     sugestoes = dados.get("sugestoes", [])
-    contexto  = dados.get("contexto", "tela atual")
-    frase     = dados.get("frase_jarvis", f"Senhor, analisei a {contexto}.")
+    frase     = dados.get("frase_jarvis", f"Analisei a tela, {USUARIO}.")
 
     if hud:
-        hud.safe_update("ia", "ANÁLISE", contexto[:20])
+        hud.safe_update("ia", "ANÁLISE", dados.get("contexto", "tela")[:20])
 
     falar_sync(frase)
 
     if not sugestoes:
-        falar("Não identifiquei sugestões específicas para este contexto, senhor.")
+        falar(f"Não vi sugestões óbvias para esse contexto, {USUARIO}.")
         return
 
-    falar_sync(f"Tenho {len(sugestoes)} sugestão{'ões' if len(sugestoes) > 1 else ''} para você.")
+    falar_sync(f"Tenho {len(sugestoes)} sugestão{'ões' if len(sugestoes) > 1 else ''}.")
 
     for i, s in enumerate(sugestoes, 1):
-        titulo   = s.get("titulo", f"Opção {i}")
-        descricao = s.get("descricao", "")
-        if hud:
-            hud.safe_update("ia", f"SUGESTÃO {i}", titulo[:20])
-        falar_sync(f"Opção {i}: {titulo}. {descricao}")
+        falar_sync(f"Opção {i}: {s.get('titulo', '')}. {s.get('descricao', '')}")
 
-    falar_sync("Deseja executar alguma dessas opções? Diga o número ou o comando diretamente.")
-
-    # Aguarda resposta por até 8 segundos
+    falar_sync("Qual delas quer executar? Diga o número ou o comando.")
     resposta = ouvir_pergunta(timeout=8, limite=10)
     if not resposta:
-        falar("Certo, fico à disposição, senhor.")
+        falar(f"Certo, fico por aqui, {USUARIO}.")
         return
-
     _executar_sugestao_por_voz(resposta, sugestoes, hud)
 
 def _executar_sugestao_por_voz(resposta: str, sugestoes: list, hud=None):
-    """Interpreta a resposta do usuário e executa a sugestão escolhida."""
-    # Detecta número (um, dois, três / 1, 2, 3)
     mapa_nums = {
-        "um": 1, "uma": 1, "primeiro": 1, "primeira": 1, "1": 1,
-        "dois": 2, "duas": 2, "segundo": 2, "segunda": 2, "2": 2,
-        "três": 3, "tres": 3, "terceiro": 3, "terceira": 3, "3": 3,
+        "um": 1, "uma": 1, "primeiro": 1, "1": 1,
+        "dois": 2, "duas": 2, "segundo": 2, "2": 2,
+        "três": 3, "tres": 3, "terceiro": 3, "3": 3,
     }
     for palavra, idx in mapa_nums.items():
         if palavra in resposta:
@@ -838,63 +955,62 @@ def _executar_sugestao_por_voz(resposta: str, sugestoes: list, hud=None):
                 if hud and cmd:
                     processar_comando(cmd, hud)
                 return
-    # Se não reconheceu número, tenta como comando direto
-    falar_sync("Entendido, processando seu comando.")
+    falar_sync(f"Entendido.")
     if hud:
         processar_comando(resposta, hud)
 
 
-# ── Monitor Proativo de Tela ─────────────────────────────
+# ═══════════════════════════════════════════════════════════
+#  MONITOR PROATIVO DE TELA — com reações de personalidade
+# ═══════════════════════════════════════════════════════════
 _monitor_thread  = None
 _monitor_pausado = False
 
+# Controle de frequência de reações espontâneas — separado por tipo
+_ultima_reacao_espontanea = 0.0   # reações de app/inatividade
+_ultima_reacao_erro       = 0.0   # reações de erro (mais urgentes)
+_INTERVALO_MIN_REACAO     = 120   # 2 min entre reações de app/inatividade
+_INTERVALO_MIN_ERRO       = 30    # 30s entre reações de erro
+_INTERVALO_INATIVIDADE    = 180   # 3 min de tela parada para comentar
+
 def iniciar_monitor_tela(hud, intervalo: int = None):
-    """
-    Inicia thread que monitora a tela periodicamente
-    e faz sugestões automáticas quando o contexto muda.
-    """
     global _monitor_ativo, _monitor_thread
 
     if not TELA_MONITOR_ATIVO:
-        log.info("Monitor de tela desativado via .env")
         return
-
     if intervalo is None:
         intervalo = TELA_MONITOR_INTERVALO
-
-    if intervalo <= 0:
-        log.info("Intervalo=0 → monitor de tela desativado.")
-        return
-
-    if _monitor_ativo:
-        log.info("Monitor de tela já está rodando.")
+    if intervalo <= 0 or _monitor_ativo:
         return
 
     _monitor_ativo = True
     log.info(f"Monitor de tela iniciado. Intervalo: {intervalo}s")
 
     def _loop():
-        global _monitor_ativo, _monitor_pausado, _ultimo_hash, _ultimo_contexto
-        _app_anterior   = ""
-        _erro_anterior  = ""
+        global _monitor_ativo, _monitor_pausado, _ultimo_hash
+        global _app_em_foco, _ultimo_erro_visto
+        global _ultima_reacao_espontanea, _ultima_reacao_erro
 
-        # Espera inicial para o sistema estabilizar
-        time.sleep(30)
+        app_anterior  = ""
+        erro_anterior = ""
+        time.sleep(15)   # espera inicial menor — 15s em vez de 30s
 
         while _monitor_ativo:
             try:
                 if not _monitor_pausado and _PIL_OK:
-                    img      = ImageGrab.grab()
-                    h_novo   = _hash_tela(img)
+                    img    = ImageGrab.grab()
+                    h_novo = _hash_tela(img)
+                    agora  = time.time()
 
-                    if not _tela_mudou_significativamente(h_novo, _ultimo_hash):
-                        # Tela praticamente igual — não gasta API
-                        log.info("Monitor: tela sem mudança relevante, pulando análise.")
+                    if h_novo == _ultimo_hash:
+                        # Tela parada: reação de inatividade se ficou tempo suficiente
+                        if (agora - _ultima_reacao_espontanea > _INTERVALO_MIN_REACAO
+                                and agora - _ultima_analise > _INTERVALO_INATIVIDADE):
+                            reacao = _frase_reacao("inatividade")
+                            if reacao:
+                                falar(reacao)
+                                _ultima_reacao_espontanea = agora
                     else:
-                        log.info("Monitor: mudança detectada, extraindo contexto...")
-                        hud.safe_update("ia", "MONITORANDO", "Lendo tela...")
-
-                        # Passagem 1 rápida: só extrai contexto (sem gerar sugestões ainda)
                         path, _ = _capturar_tela_para_analise()
                         if path:
                             ctx = _extrair_contexto_da_tela(path)
@@ -902,215 +1018,303 @@ def iniciar_monitor_tela(hud, intervalo: int = None):
 
                             app_atual  = ctx.get("app", "")
                             erro_atual = ctx.get("erro_visivel") or ""
+                            _app_em_foco = app_atual
 
-                            # Notifica só quando o app mudou OU apareceu um erro novo
-                            app_mudou  = app_atual and app_atual != _app_anterior
-                            erro_novo  = erro_atual and erro_atual != _erro_anterior
+                            app_mudou = app_atual and app_atual != app_anterior
+                            erro_novo = erro_atual and erro_atual != erro_anterior
 
-                            if app_mudou or erro_novo:
-                                log.info(f"Monitor: contexto relevante mudou "
-                                         f"(app={app_atual}, erro={erro_atual[:40] if erro_atual else 'nenhum'})")
+                            if erro_novo:
+                                # Erro novo — reage independente do intervalo geral
+                                _ultimo_erro_visto = erro_atual
+                                if agora - _ultima_reacao_erro > _INTERVALO_MIN_ERRO:
+                                    reacao = _frase_reacao("erro_codigo")
+                                    if reacao:
+                                        falar(reacao)
+                                        _ultima_reacao_erro = agora
 
-                                # Passagem 2: gera sugestões só quando vale a pena
-                                hud.safe_update("ia", "MONITORANDO", "Gerando sugestões...")
+                                # Gera sugestões e notifica no desktop
                                 dados = _gerar_sugestoes_do_contexto(ctx)
-
                                 if "erro" not in dados and dados.get("sugestoes"):
-                                    _ultimo_hash     = h_novo
                                     _sugestoes_cache[:] = dados["sugestoes"]
                                     _ultimo_contexto.update(dados)
+                                    notificar(
+                                        "JARVIS — Erro detectado",
+                                        f"{erro_atual[:70]} · Diga 'Jarvis, me ajuda'"
+                                    )
+                                    hud.safe_update("alerta", "ERRO DETECTADO", app_atual[:20])
 
-                                    contexto = dados.get("contexto", app_atual)
-
-                                    # Notificação com detalhe real
-                                    if erro_novo:
-                                        corpo_notif = (
-                                            f"Erro detectado em {app_atual}: "
-                                            f"{erro_atual[:60]}... "
-                                            f"· Diga 'Jarvis, o que você sugere?'"
-                                        )
+                            elif app_mudou:
+                                # App mudou — reação contextual com cooldown próprio
+                                if agora - _ultima_reacao_espontanea > _INTERVALO_MIN_REACAO:
+                                    app_lower   = app_atual.lower()
+                                    tipo_reacao = None
+                                    for chave in ["spotify", "youtube", "terminal", "github"]:
+                                        if chave in app_lower:
+                                            tipo_reacao = chave if chave in _REACOES else None
+                                            break
+                                    if tipo_reacao:
+                                        reacao = _frase_reacao(tipo_reacao)
+                                        if reacao:
+                                            falar(reacao)
+                                            _ultima_reacao_espontanea = agora
                                     else:
-                                        corpo_notif = (
-                                            f"{contexto} · "
-                                            f"Diga 'Jarvis, o que você sugere?'"
-                                        )
-                                    notificar("JARVIS — Sugestões prontas", corpo_notif)
-                                    hud.safe_update("foco", "SUGESTÃO", contexto[:20])
+                                        # App sem reação específica — comenta brevemente
+                                        falar(f"{app_atual} aberto, {USUARIO}. Pode chamar se precisar.")
+                                        _ultima_reacao_espontanea = agora
 
-                                _app_anterior  = app_atual
-                                _erro_anterior = erro_atual
-                            else:
-                                log.info("Monitor: mudança visual mas contexto igual, ignorando.")
-                                _ultimo_hash = h_novo
-                                hud.safe_update(False, "STANDBY", "Aguardando comando...")
+                                hud.safe_update(False, "MONITORANDO", app_atual[:20])
+
+                            app_anterior  = app_atual
+                            erro_anterior = erro_atual
+                            _ultimo_hash  = h_novo
+
+                # Verifica CPU e bateria
+                _verificar_alertas_sistema(hud)
 
             except Exception as e:
-                log.error(f"Monitor tela loop: {e}")
-
-            # Aguarda o intervalo configurado
-            for _ in range(intervalo):
-                if not _monitor_ativo:
-                    break
-                time.sleep(1)
+                log.error(f"Monitor loop: {e}")
 
     _monitor_thread = threading.Thread(target=_loop, daemon=True)
     _monitor_thread.start()
 
+def _verificar_alertas_sistema(hud):
+    """Avisa proativamente sobre CPU alta ou bateria baixa."""
+    global _ultima_reacao_espontanea
+    agora = time.time()
+    if agora - _ultima_reacao_espontanea < _INTERVALO_MIN_REACAO:
+        return
+
+    cpu = psutil.cpu_percent(interval=None)
+    if cpu > 85:
+        falar(_frase_reacao("cpu_alta"))
+        hud.safe_update("alerta", "CPU ALTA", f"{cpu:.0f}%")
+        _ultima_reacao_espontanea = agora
+        return
+
+    try:
+        bat = psutil.sensors_battery()
+        if bat and not bat.power_plugged and bat.percent < 15:
+            falar(_frase_reacao("bateria_baixa"))
+            hud.safe_update("alerta", "BATERIA BAIXA", f"{bat.percent:.0f}%")
+            _ultima_reacao_espontanea = agora
+    except Exception:
+        pass
+
 def pausar_monitor_tela():
     global _monitor_pausado
     _monitor_pausado = True
-    log.info("Monitor de tela pausado.")
 
 def retomar_monitor_tela():
     global _monitor_pausado
     _monitor_pausado = False
-    log.info("Monitor de tela retomado.")
 
 def parar_monitor_tela():
     global _monitor_ativo
     _monitor_ativo = False
-    log.info("Monitor de tela encerrado.")
 
 
 # ═══════════════════════════════════════════════════════════
-#  NLU — RESOLUÇÃO DE INTENÇÃO NATURAL
-#  Converte frases livres em intenções normalizadas antes
-#  de processar. Ex: "quero ouvir música" → "abrir spotify"
+#  NLU — RESOLUÇÃO DE INTENÇÃO NATURAL  (muito mais flexível)
 # ═══════════════════════════════════════════════════════════
 
-# Mapa de intenções: (padrões regex) → comando normalizado
 _INTENCOES = [
-    # 🎵 Música / Spotify
-    (r"(quero|vou|bota|coloca|toca|ouvir|escutar|liga|abre?).*(m[úu]sica|spotify|som|faixa|playlist|álbum|album)",
+    # 🎵 Música
+    (r"(quero|bota|coloca|toca|ouvir|escutar|liga|abre?|inicia?).*(música|spotify|som|faixa|playlist)",
      "abrir spotify"),
-    (r"(para|pausa|silencia|silenciar|para a m[úu]sica|para o som)",
+    (r"(para|pausa|silencia|para a música|para o som|chega de música)",
      "pausar"),
-    (r"(próxima|pula|avança|skip|próxima faixa|pular faixa)",
+    (r"(próxima|pula|avança|skip|outra faixa|pular)",
      "proxima"),
-    (r"(volta|anterior|faixa anterior|música anterior)",
+    (r"(volta|anterior|faixa anterior|de novo essa)",
      "voltar"),
+    (r"(aumenta|sobe).*(volume|som)",
+     "volume 80"),
+    (r"(diminui|baixa|abaixa).*(volume|som)",
+     "volume 30"),
 
     # 🌐 Navegador
-    (r"(abre?|liga|inicia?|entra no?|vai pro?|quero usar).*(firefox|navegador|browser|internet|chrome)",
+    (r"(abre?|liga|vai|entra).*(firefox|navegador|browser|internet|chrome|web)",
      "abrir firefox"),
-    (r"(pesquisa|busca|procura|googl[ea]|quero saber|me fala sobre|o que [eé])\s+(.+)",
+    (r"(pesquisa|busca|procura|googl[ea]|quero saber|me fala sobre|o que [eé]|como funciona)\s+(.+)",
      "pesquisar \\2"),
+    (r"(abre?|vai).*(youtube)",
+     "pesquisar youtube"),
+    (r"(abre?|vai).*(github)",
+     "pesquisar github"),
 
-    # 💻 Apps comuns
-    (r"(abre?|liga|inicia?|quero usar|entra no?).*(terminal|bash|shell|linha de comando)",
+    # 💻 Apps
+    (r"(abre?|liga|inicia?|quero usar|entra).*(terminal|bash|shell|linha de comando|cmd)",
      "abrir terminal"),
-    (r"(abre?|liga|inicia?|quero usar|entra no?).*(vscode|vs code|visual studio|editor|código)",
+    (r"(abre?|liga|inicia?|quero usar).*(vscode|vs code|visual studio|editor|código|code)",
      "abrir code"),
-    (r"(abre?|liga|inicia?|quero usar|entra no?).*(calculadora|calcular|conta)",
+    (r"(abre?|liga).*(calculadora|calcular)",
      "abrir calculadora"),
-    (r"(abre?|liga|inicia?|quero usar|entra no?).*(gerenciador|arquivos|pasta|explorador)",
+    (r"(abre?|liga).*(gerenciador|arquivos|pasta|explorador|files)",
      "abrir gerenciador"),
+    (r"(abre?|liga).*(discord)",
+     "abrir discord"),
+    (r"(abre?|liga).*(spotify)",
+     "abrir spotify"),
 
     # 🕐 Hora / Data
-    (r"(que horas|que hora|horas s[aã]o|me diz as horas|quanto[s]? horas)",
+    (r"(que horas|que hora|horas são|quanto[s]? hora[s]?|me diz as horas)",
      "que horas são"),
-    (r"(que dia|qual a data|data de hoje|hoje [eé] dia)",
+    (r"(que dia|qual.*data|data de hoje|hoje.*dia|dia de hoje)",
      "data de hoje"),
 
     # 🌤 Clima
-    (r"(como (t[aá]|est[aá]) o (tempo|clima)|vai chover|t[aá] frio|t[aá] calor|previs[aã]o do tempo)",
+    (r"(como.*tempo|como.*clima|vai chover|tá frio|tá calor|previsão|como.*tá lá fora)",
      "clima"),
 
-    # 🔇 Parar fala
-    (r"(cala|cala a boca|para de falar|silêncio|chega|cancelar|para jarvis)",
+    # 🔇 Parar
+    (r"(cala|para de falar|silêncio|chega|cancela[r]?|para jarvis|esquece)",
      "cala boca"),
 
     # 📸 Tela
-    (r"(tira|faz|captura|salva).*(screenshot|print|printscreen|captura de tela)",
+    (r"(tira|faz|captura|salva).*(screenshot|print|printscreen|foto da tela|captura de tela)",
      "screenshot"),
-    (r"(analisa|descreve|o que (tem|t[aá]|aparece|vê)|me conta).*(tela|screen)",
-     "analisar tela"),
+
+    # 🤖 Sugestões / ajuda
+    (r"(me ajuda|o que fazer|o que você sugere|como resolv|tá travado|não sei o que fazer|me dá uma ideia)",
+     "me ajuda com o que estou fazendo"),
+    (r"(explica|me explica|como faz|como funciona|me ensina).+",
+     "me ajuda com o que estou fazendo"),
+
+    # 📋 Guia passo a passo
+    (r"(me guia|me ajuda a fazer|quero fazer|preciso fazer|como (eu )?faço).+",
+     "guiar \\0"),
 
     # 🔋 Sistema
-    (r"(quanto[s]? (t[eê]m|t[aá]|est[aá]).*(bateria|carga)|bateria)",
+    (r"(bateria|quanto.*bateria|tá carregando)",
      "bateria"),
-    (r"(cpu|processador|mem[oó]ria|ram|uso do sistema|como (t[aá]|est[aá]) o (pc|computador|sistema))",
+    (r"(cpu|processador|memória|ram|uso do sistema|como.*pc|como.*computador|tá lento)",
      "status sistema"),
+
+    # 💬 Conversa natural
+    (r"(tudo bem|como você (tá|está)|você (tá|está) bem|e aí)",
+     "conversa"),
+    (r"(obrigado|valeu|muito obrigado|ótimo|perfeito|que bom)",
+     "conversa"),
 ]
 
 def _resolver_intencao(comando: str) -> str:
-    """
-    Tenta mapear uma frase natural para um comando normalizado.
-    Retorna o comando original se nenhuma intenção for encontrada.
-    """
     for padrao, intencao in _INTENCOES:
-        m = re.search(padrao, comando)
+        m = re.search(padrao, comando, re.IGNORECASE)
         if m:
-            # Suporte a backreference no intencao (ex: "pesquisar \\2")
             try:
                 resultado = m.expand(intencao)
             except re.error:
                 resultado = intencao
-            log.info(f"NLU: '{comando}' → '{resultado}'")
+            log.info(f"NLU: '{comando[:40]}' → '{resultado[:40]}'")
             return resultado
-    return comando  # sem mapeamento, passa direto
+    return comando
 
 
 # ═══════════════════════════════════════════════════════════
-#  PROCESSADOR DE COMANDOS
+#  PROCESSADOR DE COMANDOS — com personalidade e guias
 # ═══════════════════════════════════════════════════════════
 def processar_comando(comando: str, hud):
-    """Recebe um comando em texto puro (minúsculas) e executa a ação."""
-    comando = _resolver_intencao(comando)   # ⚡ NLU: normaliza intenção antes de processar
+    comando = _resolver_intencao(comando)
     log.info(f"CMD: {comando}")
     hud.safe_update("ativo", "ATIVADO", comando[:32])
     hud.push_historico(re.sub(WAKE_WORD, "", comando).strip())
 
     # ── Parar fala ────────────────────────────────────────
-    if any(p in comando for p in ["para de falar", "cala boca", "silencio", "cancelar fala"]):
+    if any(p in comando for p in ["para de falar", "cala boca", "silencio", "cancela"]):
         parar_fala()
+        falar(f"Certo, {USUARIO}.")
 
-    # ── Análise contextual: o que você sugere ────────────
+    # ── Conversa casual ──────────────────────────────────
+    elif "conversa" == comando:
+        respostas_casuais = [
+            f"Tudo ótimo por aqui, {USUARIO}. Sistemas rodando, sem erros até agora.",
+            f"Bem, obrigado. Você que manda.",
+            f"Tudo nos conformes, {USUARIO}. Pronto para o que precisar.",
+            f"De nada, {USUARIO}. É para isso que estou aqui.",
+        ]
+        clean = re.sub(WAKE_WORD, "", comando).strip()
+        if any(p in clean for p in ["obrigado", "valeu", "ótimo", "perfeito"]):
+            falar(random.choice([
+                f"De nada, {USUARIO}.",
+                f"Disponha.",
+                f"É para isso que estou aqui, {USUARIO}.",
+                f"Quando precisar.",
+            ]))
+        else:
+            falar(random.choice(respostas_casuais))
+
+    # ── Análise contextual / me ajuda ────────────────────
     elif any(p in comando for p in [
-        "o que você sugere", "o que voce sugere",
-        "me ajuda com o que estou fazendo",
-        "sugestões", "sugestoes", "analisar contexto",
-        "o que posso fazer", "me dá uma ideia", "me da uma ideia",
-        "o que está na tela", "me sugere algo",
+        "me ajuda com o que estou fazendo", "o que você sugere",
+        "o que voce sugere", "sugestões", "sugestoes",
+        "analisar contexto", "o que posso fazer",
+        "me dá uma ideia", "tá travado", "não sei o que fazer",
     ]):
         hud.safe_update("ia", "ANALISANDO", "Contexto da tela...")
-        falar_sync("Analisando o contexto da tela, um momento, senhor.")
+        falar_sync(f"Deixa eu dar uma olhada no que você tem na tela, {USUARIO}.")
         dados = analisar_tela_contextual(forcar=True)
         falar_sugestoes(dados, hud)
 
-    # ── Análise contextual: ver sugestões do cache ───────
-    elif any(p in comando for p in [
-        "repetir sugestões", "repetir sugestoes",
-        "quais são as sugestões", "quais sao as sugestoes",
-    ]):
+    # ── Repetir sugestões do cache ────────────────────────
+    elif any(p in comando for p in ["repetir sugestões", "quais são as sugestões"]):
         if _sugestoes_cache:
-            hud.safe_update("ia", "SUGESTÕES", "Do cache...")
             dados = {
                 "contexto":    "última análise",
                 "sugestoes":   _sugestoes_cache,
-                "frase_jarvis": "Aqui estão as sugestões da última análise, senhor.",
+                "frase_jarvis": f"Sugestões da última análise, {USUARIO}.",
             }
             falar_sugestoes(dados, hud)
         else:
-            falar("Não há sugestões em cache, senhor. Diga: Jarvis, o que você sugere?")
+            falar(f"Nenhuma sugestão em cache. Diga: Jarvis, me ajuda.")
 
-    # ── Monitor de tela: ligar/desligar ─────────────────
-    elif any(p in comando for p in ["ativar monitor", "ligar monitor de tela", "monitorar tela"]):
+    # ── Guia passo a passo ────────────────────────────────
+    elif any(p in comando for p in [
+        "me guia", "quero fazer", "preciso fazer",
+        "me ajuda a fazer", "como faço", "como eu faço",
+    ]):
+        tarefa = re.sub(
+            r"jarvis|me guia|quero fazer|preciso fazer|me ajuda a fazer|como faço|como eu faço",
+            "", comando).strip()
+        if tarefa:
+            hud.safe_update("foco", "GUIA", "Montando...")
+            falar_sync(f"Vou montar um passo a passo para {tarefa}, um segundo.")
+            iniciar_guia(tarefa[:30], tarefa, hud)
+        else:
+            falar_sync(f"O que você quer fazer, {USUARIO}?")
+            resp = ouvir_pergunta(timeout=10, limite=30)
+            if resp:
+                iniciar_guia(resp[:30], resp, hud)
+
+    elif any(p in comando for p in ["próximo passo", "feito", "próxima etapa", "pode continuar", "avança"]):
+        if _tarefa_ativa:
+            avancar_passo(hud)
+        else:
+            falar(f"Não há guia ativo no momento, {USUARIO}.")
+
+    elif any(p in comando for p in ["cancelar guia", "para o guia", "não precisa mais"]):
+        cancelar_guia(hud)
+
+    elif "status do guia" in comando or "em que passo" in comando:
+        s = status_guia()
+        falar(s if s else f"Nenhum guia ativo, {USUARIO}.")
+
+    # ── Monitor de tela ───────────────────────────────────
+    elif any(p in comando for p in ["ativar monitor", "ligar monitor", "monitorar tela"]):
         retomar_monitor_tela()
         hud.safe_update("ia", "MONITOR", "Ativo")
-        falar("Monitor de tela ativado, senhor. Vou notificá-lo quando o contexto mudar.")
+        falar(f"Monitor ativo, {USUARIO}. Vou falar se notar algo.")
 
-    elif any(p in comando for p in ["desativar monitor", "pausar monitor", "parar monitor"]):
+    elif any(p in comando for p in ["desativar monitor", "pausar monitor", "para de monitorar"]):
         pausar_monitor_tela()
         hud.safe_update(False, "MONITOR", "Pausado")
-        falar("Monitor de tela pausado, senhor.")
+        falar(f"Monitor pausado, {USUARIO}.")
 
-    # ── Eventos: cadastrar ────────────────────────────────
+    # ── Eventos ───────────────────────────────────────────
     elif any(p in comando for p in ["lembre", "adicionar evento", "cadastrar evento", "salvar data"]):
         resultado = ev_extrair_data_e_nome(comando)
         if not resultado:
-            hud.safe_update("foco", "EVENTO", "Aguardando data...")
-            falar_sync("Pode falar a data e o nome do evento, senhor. Por exemplo: dia 24 de junho como São João.")
+            hud.safe_update("foco", "EVENTO", "Aguardando...")
+            falar_sync(f"Fala a data e o nome, {USUARIO}. Por exemplo: dia 24 de junho como São João.")
             detalhe   = ouvir_pergunta(timeout=12, limite=40)
             resultado = ev_extrair_data_e_nome(detalhe) if detalhe else None
         if resultado:
@@ -1118,31 +1322,38 @@ def processar_comando(comando: str, hud):
             ev_adicionar(nome, dia, mes, ano)
             ano_str = f" de {ano}" if ano else ""
             hud.safe_update("foco", "EVENTO", f"Salvo: {nome[:20]}")
-            falar(f"Evento {nome} cadastrado para dia {dia} de {mes}{ano_str}, senhor.")
+            falar(f"Anotado — {nome} no dia {dia}/{mes}{ano_str}.")
         else:
-            falar("Não entendi a data ou o nome do evento, senhor. Tente novamente.")
+            falar(f"Não entendi a data, {USUARIO}. Tenta de novo.")
 
-    elif any(p in comando for p in ["quantos dias faltam", "quanto tempo falta",
-                                     "quando é", "quando sera", "falta para"]):
+    elif any(p in comando for p in [
+        "quantos dias faltam", "quando é", "falta para",
+        "quanto falta", "falta quanto", "quando vai ser",
+    ]):
         eventos    = ev_listar()
         encontrado = ev_buscar_por_voz(comando, eventos)
         if encontrado:
             hud.safe_update("foco", "CONTAGEM", encontrado["nome"][:20])
             falar(ev_frase(encontrado["nome"], encontrado["faltam"]))
         elif eventos:
-            hud.safe_update("foco", "AGENDA", "Todos os eventos")
-            for ev in eventos[:5]: falar(ev_frase(ev["nome"], ev["faltam"]))
+            for ev in eventos[:5]:
+                falar(ev_frase(ev["nome"], ev["faltam"]))
         else:
-            falar("Não há eventos cadastrados, senhor. Diga: lembre dia X de mês como nome do evento.")
+            falar(f"Agenda vazia, {USUARIO}.")
 
-    elif any(p in comando for p in ["listar eventos", "quais eventos", "minha agenda"]):
+    elif any(p in comando for p in [
+        "listar eventos", "quais eventos", "minha agenda",
+        "ver agenda", "o que tenho na agenda", "próximos eventos",
+        "proximos eventos", "me fala a agenda", "o que tem marcado",
+    ]):
         eventos = ev_listar()
         if not eventos:
-            falar("Agenda vazia, senhor.")
+            falar(f"Agenda limpa, {USUARIO}. Sem nada marcado.")
         else:
             qtd = len(eventos)
-            falar(f"Você tem {qtd} evento{'s' if qtd > 1 else ''} cadastrado{'s' if qtd > 1 else ''}.")
-            for ev in eventos: falar(ev_frase(ev["nome"], ev["faltam"]))
+            falar(f"Você tem {qtd} evento{'s' if qtd > 1 else ''} na agenda.")
+            for ev in eventos:
+                falar(ev_frase(ev["nome"], ev["faltam"]))
         hud.safe_update("foco", "AGENDA", f"{len(eventos)} eventos")
 
     elif any(p in comando for p in ["remover evento", "deletar evento", "apagar evento"]):
@@ -1150,60 +1361,95 @@ def processar_comando(comando: str, hud):
         if m:
             nome_alvo = m.group(1).strip()
             if ev_remover(nome_alvo):
-                hud.safe_update("foco", "AGENDA", "Evento removido")
-                falar(f"Evento {nome_alvo} removido, senhor.")
+                falar(f"Evento {nome_alvo} removido.")
             else:
-                falar(f"Não encontrei nenhum evento chamado {nome_alvo}, senhor.")
+                falar(f"Não achei nenhum evento chamado {nome_alvo}.")
         else:
-            falar("Qual evento deseja remover, senhor?")
+            falar(f"Qual evento remover, {USUARIO}?")
 
-    # ── Fechar processo ───────────────────────────────────
+    # ── Processos / sistema ───────────────────────────────
     elif "fechar" in comando or "matar processo" in comando:
         alvo = re.sub(r"jarvis|fechar|matar processo", "", comando).strip()
         ok   = fechar_app(alvo) if alvo else False
-        falar("Processo encerrado." if ok else "Não encontrei o processo, senhor.")
+        falar("Processo encerrado." if ok
+              else f"Não achei o processo, {USUARIO}.")
 
-    elif any(p in comando for p in ["processos", "cpu alta", "o que está rodando"]):
+    elif any(p in comando for p in ["processos", "cpu alta", "o que está rodando", "status sistema"]):
         hud.safe_update("ia", "PROCESSOS", "Top CPU...")
-        falar(f"Processos com mais CPU: {listar_processos()}.")
+        cpu  = psutil.cpu_percent(interval=1)
+        ram  = psutil.virtual_memory().percent
+        resp = f"CPU em {cpu:.0f}%, memória em {ram:.0f}%."
+        top  = listar_processos()
+        if cpu > 70:
+            resp += f" Mais pesados: {top}."
+        falar(resp)
+
+    elif "bateria" in comando:
+        try:
+            bat = psutil.sensors_battery()
+            if bat:
+                plugged = "carregando" if bat.power_plugged else "na bateria"
+                falar(f"Bateria em {bat.percent:.0f}%, {plugged}.")
+            else:
+                falar(f"Não consegui ler a bateria, {USUARIO}.")
+        except Exception:
+            falar(f"Sem sensor de bateria disponível.")
 
     elif "mover janela" in comando or "janela para" in comando:
         for d in ["esquerda", "direita", "cima", "baixo", "maximizar"]:
             if d in comando:
-                mover_janela(d); falar(f"Janela movida para {d}."); break
+                mover_janela(d)
+                falar(f"Janela para {d}.")
+                break
         else:
-            falar("Para onde, senhor? Esquerda, direita, cima, baixo ou maximizar.")
+            falar(f"Para onde? Esquerda, direita, cima, baixo ou maximizar.")
 
-    elif any(p in comando for p in ["executar script", "rodar script"]):
+    elif any(p in comando for p in ["executar script", "rodar script", "executa o script"]):
         hud.safe_update("ia", "SCRIPT", "Aguardando...")
-        falar_sync("Qual o caminho do script, senhor?")
+        falar_sync(f"Qual o caminho do script, {USUARIO}?")
         caminho = ouvir_pergunta(timeout=8, limite=20)
-        if caminho: falar(f"Script concluído. {executar_script(caminho)[:100]}")
-        else:       falar("Não captei o caminho.")
+        if caminho:
+            resultado = executar_script(caminho)
+            falar(f"Script concluído. {resultado[:100]}")
+        else:
+            falar("Não captei o caminho.")
 
-    # ── Analisar tela (legado, genérico) ─────────────────
-    elif any(p in comando for p in ["analisar tela", "descrever tela"]):
+    elif any(p in comando for p in ["analisar tela", "descrever tela", "o que está na tela"]):
         hud.safe_update("ia", "VISÃO", "Processando...")
-        falar_sync("Analisando a tela, um momento.")
-        falar(analisar_tela())
+        falar_sync(f"Um segundo, {USUARIO}.")
+        ctx  = None
+        path, _ = _capturar_tela_para_analise()
+        if path:
+            ctx = _extrair_contexto_da_tela(path)
+            os.remove(path)
+        if ctx:
+            falar(ctx.get("conteudo_resumo", "Não consegui descrever a tela."))
+        else:
+            falar(f"Não consegui capturar a tela, {USUARIO}.")
 
     elif any(p in comando for p in ["digitar", "escrever no teclado"]):
         txt = re.sub(r"jarvis|digitar|escrever no teclado", "", comando).strip()
         if txt:
-            digitar_texto(txt); falar("Digitado.")
+            digitar_texto(txt)
+            falar(_confirmar())
         else:
-            falar_sync("O que deseja digitar?")
+            falar_sync(f"O que devo digitar, {USUARIO}?")
             resp = ouvir_pergunta(timeout=6, limite=15)
-            if resp: digitar_texto(resp)
+            if resp:
+                digitar_texto(resp)
+                falar(_confirmar())
 
-    elif any(p in comando for p in ["screenshot", "captura de tela", "printscreen"]):
+    elif any(p in comando for p in ["screenshot", "captura de tela", "printscreen", "print da tela"]):
         dest = tirar_screenshot()
-        falar("Screenshot salvo." if dest else "Não consegui tirar o screenshot.")
-        if dest: notificar("Screenshot", dest)
+        if dest:
+            falar(f"Screenshot salvo em {os.path.basename(dest)}.")
+            notificar("Screenshot", dest)
+        else:
+            falar(f"Não consegui tirar o screenshot, {USUARIO}.")
 
-    elif any(p in comando for p in ["mensagem no discord", "enviar discord"]):
+    elif any(p in comando for p in ["mensagem no discord", "enviar discord", "manda no discord"]):
         hud.safe_update("discord", "DISCORD", "Aguardando...")
-        falar_sync("O que devo enviar, senhor?")
+        falar_sync(f"O que mando, {USUARIO}?")
         msg = ouvir_pergunta(timeout=8, limite=30)
         falar(discord_enviar(msg) if msg else "Não captei a mensagem.")
 
@@ -1218,27 +1464,23 @@ def processar_comando(comando: str, hud):
                 "", m_filtro.group(1)).strip()
         qtd  = 5
         nums = [int(w) for w in comando.split() if w.isdigit()]
-        if nums: qtd = min(nums[0], 10)
-        if filtro:
-            falar_sync(f"Buscando e-mails de {filtro}, um momento.")
-            hud.safe_update("ia", "E-MAIL", filtro[:15])
-        else:
-            falar_sync("Verificando sua caixa de entrada, um momento.")
-        resultado = ler_emails(quantidade=qtd, filtro_remetente=filtro)
-        hud.safe_update("ia", "E-MAIL", f"{qtd} lidos")
-        falar(resultado)
+        if nums:
+            qtd = min(nums[0], 10)
+        falar_sync("Verificando e-mail, um segundo." if not filtro
+                   else f"Buscando e-mails de {filtro}.")
+        falar(ler_emails(quantidade=qtd, filtro_remetente=filtro))
 
-    elif any(p in comando for p in ["pausar", "parar musica"]):
+    elif any(p in comando for p in ["pausar", "parar musica", "pause"]):
         subprocess.run(["playerctl", "pause"], capture_output=True)
-        falar("Música pausada.")
+        falar("Pausado.")
 
-    elif any(p in comando for p in ["proxima", "pular"]):
+    elif any(p in comando for p in ["proxima", "pular", "skip"]):
         subprocess.run(["playerctl", "next"], capture_output=True)
-        falar("Pulando faixa.")
+        falar("Próxima faixa.")
 
-    elif any(p in comando for p in ["voltar", "anterior"]):
+    elif any(p in comando for p in ["voltar", "anterior", "volta a"]):
         subprocess.run(["playerctl", "previous"], capture_output=True)
-        falar("Faixa anterior.")
+        falar("Voltando.")
 
     elif "volume" in comando:
         nums = [w for w in comando.split() if w.isdigit()]
@@ -1246,25 +1488,26 @@ def processar_comando(comando: str, hud):
             vol = min(int(nums[0]), 100)
             subprocess.run(["pactl", "set-sink-volume", "@DEFAULT_SINK@", f"{vol}%"],
                            capture_output=True)
-            falar(f"Volume em {vol} por cento.")
+            falar(f"Volume em {vol}%.")
         else:
-            falar("Qual porcentagem, senhor?")
+            falar(f"Qual porcentagem, {USUARIO}?")
 
-    elif any(p in comando for p in ["abrir", "iniciar"]):
+    elif any(p in comando for p in ["abrir", "iniciar", "abre", "liga"]):
         hud.safe_update(False, "ABRINDO", "App")
         falar(abrir_app(comando))
 
-    elif any(p in comando for p in ["pesquisa", "pesquisar", "buscar"]):
-        termo = re.sub(r"jarvis|pesquisa[r]?|buscar", "", comando).strip()
+    elif any(p in comando for p in ["pesquisa", "pesquisar", "buscar", "busca", "procura"]):
+        termo = re.sub(r"jarvis|pesquisa[r]?|buscar?|procura[r]?", "", comando).strip()
         if termo:
             subprocess.Popen(["xdg-open",
                                f"https://www.google.com/search?q={urllib.parse.quote(termo)}"])
             falar(f"Pesquisando {termo}.")
         else:
-            falar("O que pesquisar, senhor?")
+            falar(f"O que pesquisar, {USUARIO}?")
 
-    elif "clima" in comando or "tempo" in comando:
-        cidade = re.sub(r"jarvis|clima|tempo|em", "", comando).strip() or "Aracaju"
+    elif "clima" in comando or "tempo" in comando or "chuva" in comando:
+        cidade = re.sub(r"jarvis|clima|tempo|em|como.*tá|como.*está|previsão", "",
+                        comando).strip() or "Aracaju"
         hud.safe_update("ia", "CLIMA", cidade[:20])
         falar(obter_clima(cidade))
 
@@ -1272,65 +1515,87 @@ def processar_comando(comando: str, hud):
         nums = [int(w) for w in comando.split() if w.isdigit()]
         if nums:
             m = nums[0]
-            falar(f"Lembrete em {m} minuto{'s' if m > 1 else ''}.")
+            falar(f"Lembrete em {m} minuto{'s' if m > 1 else ''}. Pode trabalhar.")
             def _lembrete(mins=m):
                 time.sleep(mins * 60)
                 hud.safe_update("alerta", "LEMBRETE", f"{mins}min")
-                notificar("JARVIS – Lembrete", f"{mins} minutos passaram.")
-                falar("Senhor, seu lembrete chegou.")
+                notificar("JARVIS – Lembrete", f"{mins} minutos se passaram.")
+                falar(f"{USUARIO}, seu lembrete de {mins} minuto{'s' if mins > 1 else ''} chegou.")
             threading.Thread(target=_lembrete, daemon=True).start()
         else:
-            falar("Em quantos minutos, senhor?")
+            falar_sync(f"Em quantos minutos, {USUARIO}?")
+            resp = ouvir_pergunta(timeout=6, limite=5)
+            nums2 = [int(w) for w in (resp or "").split() if w.isdigit()]
+            if nums2:
+                processar_comando(f"lembrete {nums2[0]} minutos", hud)
 
-    elif any(p in comando for p in ["horas", "que horas"]):
-        falar(f"São {datetime.datetime.now().strftime('%H:%M')}, senhor.")
+    elif any(p in comando for p in ["horas", "que horas", "hora certa"]):
+        agora = datetime.datetime.now()
+        falar(f"São {agora.strftime('%H:%M')}, {USUARIO}.")
 
-    elif "data" in comando or "dia" in comando:
+    elif any(p in comando for p in ["data de hoje", "que dia é hoje", "qual a data", "dia de hoje"]):
         falar(f"Hoje é {datetime.datetime.now().strftime('%d de %B de %Y')}.")
 
-    elif any(p in comando for p in ["quanto e", "quanto é", "calcular", "calcula"]):
-        expr = re.sub(r"jarvis|quanto [eé]|calcul[ae]r?", "", comando).replace("x", "*").strip()
+    elif any(p in comando for p in ["quanto é", "quanto e", "calcular", "calcula", "me calcula"]):
+        expr = re.sub(r"jarvis|quanto [eé]|calcul[ae]r?|me calcula", "",
+                      comando).replace("x", "*").replace("vezes", "*").replace(
+                      "mais", "+").replace("menos", "-").strip()
         r    = calcular(expr)
-        falar(f"Resultado: {r}." if r is not None
-              else consultar_ia(f"Calcule: {expr}", curto=True))
+        if r is not None:
+            falar(f"{expr} = {r}.")
+        else:
+            falar(consultar_ia(f"Calcule: {expr}", curto=True))
 
-    elif any(p in comando for p in ["foco", "estudar", "produtividade"]):
-        hud.safe_update("foco", "MODO FOCO", "Produtividade ativa")
-        pausar_monitor_tela()   # Pausa o monitor no modo foco para não interromper
-        notificar("JARVIS", "Modo foco ativo. Monitor de tela pausado.")
-        falar("Protocolo de foco iniciado. Monitor de tela pausado para não te interromper, senhor.")
+    elif any(p in comando for p in ["foco", "estudar", "produtividade", "modo foco"]):
+        hud.safe_update("foco", "MODO FOCO", "Ativo")
+        pausar_monitor_tela()
+        notificar("JARVIS", "Modo foco ativo.")
+        falar(f"Modo foco ativado, {USUARIO}. Monitor pausado para não te interromper. Bom trabalho.")
 
-    elif any(p in comando for p in ["limpar memoria", "nova conversa", "resetar ia"]):
+    elif any(p in comando for p in ["limpar memória", "nova conversa", "resetar", "limpar histórico"]):
         limpar_historico()
-        falar("Memória de conversa limpa.")
+        falar(f"Memória de conversa limpa, {USUARIO}. Começando do zero.")
 
-    elif any(p in comando for p in ["desligar", "encerrar", "sair"]):
+    elif any(p in comando for p in ["desligar", "encerrar", "sair", "desativa"]):
         parar_monitor_tela()
-        falar_sync("Desligando sistemas Mark XII. Até logo, senhor.")
+        despedidas = [
+            f"Desligando sistemas Mark XIII. Até logo, {USUARIO}.",
+            f"Encerrando. Foi um prazer trabalhar com você hoje, {USUARIO}.",
+            f"Sistemas offline. Descanse bem, {USUARIO}.",
+        ]
+        falar_sync(random.choice(despedidas))
         hud.animacao_shutdown()
 
-    elif any(p in comando for p in ["ativar ia", "modo ia", "tenho uma pergunta", "preciso de ajuda"]):
-        hud.safe_update("ia", "IA ATIVA", "Aguardando...")
-        falar_sync("Pode falar, senhor.")
-        pergunta = ouvir_pergunta(timeout=10, limite=35)
-        if pergunta:
-            hud.safe_update("ia", "PROCESSANDO", "Gemini...")
-            falar(consultar_ia(pergunta).replace("*", "").replace("#", ""))
-        else:
-            falar("Não captei sua pergunta.")
-
-    # ── Fallback: resposta rápida da IA ──────────────────
+    # ── Fallback: IA com contexto ─────────────────────────
     else:
         hud.safe_update("ia", "CONSULTANDO", "Gemini...")
         clean = re.sub(WAKE_WORD, "", comando).strip()
-        falar(consultar_ia(clean, curto=True).replace("*", "").replace("#", ""))
 
-    time.sleep(0.4)
+        # Se há guia ativo, injeta o contexto na resposta
+        contexto_guia = ""
+        if _tarefa_ativa:
+            contexto_guia = (
+                f"\n[CONTEXTO: o usuário está no passo "
+                f"{_tarefa_ativa['passo_atual']+1} de "
+                f"'{_tarefa_ativa['titulo']}'. "
+                f"Responda levando isso em conta.]"
+            )
+
+        # Injeta contexto da tela se disponível
+        contexto_tela = ""
+        if _app_em_foco:
+            contexto_tela = f"\n[TELA ATUAL: {_app_em_foco}]"
+
+        prompt_enriquecido = clean + contexto_guia + contexto_tela
+        resposta = consultar_ia(prompt_enriquecido, curto=True)
+        falar(resposta.replace("*", "").replace("#", ""))
+
+    time.sleep(0.3)
     hud.safe_update(False, "STANDBY", "Aguardando comando...")
 
 
 # ═══════════════════════════════════════════════════════════
-#  LOOP PRINCIPAL  (chamado pela thread do HUD)
+#  LOOP PRINCIPAL
 # ═══════════════════════════════════════════════════════════
 def rodar_jarvis(hud):
     time.sleep(1)
@@ -1338,26 +1603,33 @@ def rodar_jarvis(hud):
     calibrar_microfone()
 
     agora    = datetime.datetime.now()
-    saudacao = ("Bom dia"   if 5  <= agora.hour < 12
-           else "Boa tarde" if 12 <= agora.hour < 18
+    hora     = agora.hour
+    saudacao = ("Bom dia" if 5 <= hora < 12
+           else "Boa tarde" if 12 <= hora < 18
            else "Boa noite")
+
     try:
         bat = int(psutil.sensors_battery().percent)
+        bat_str = f"Bateria em {bat}%."
     except Exception:
-        bat = "estável"
+        bat_str = ""
 
-    hud.safe_update(False, "ONLINE", f"BAT {bat}%")
-    falar_sync(f"{saudacao}, senhor. Sistemas Mark XII operacionais. Bateria em {bat} por cento.")
-    notificar("JARVIS Online", f"{saudacao}, senhor.")
+    hud.safe_update(False, "ONLINE", "Mark XIII")
+
+    # Saudação com personalidade
+    saudacoes_completas = [
+        f"{saudacao}, {USUARIO}. Sistemas Mark XIII operacionais. {bat_str} Pronto quando você quiser.",
+        f"{saudacao}. Mark XIII online. {bat_str} O que a gente vai fazer hoje?",
+        f"{saudacao}, {USUARIO}. Tudo operacional. {bat_str} Pode começar.",
+    ]
+    falar_sync(random.choice(saudacoes_completas))
+    notificar("JARVIS Online", f"{saudacao}, {USUARIO}.")
     ev_anunciar_iniciais(hud, falar_sync)
 
-    # Inicia o monitor de tela em background
     iniciar_monitor_tela(hud, intervalo=TELA_MONITOR_INTERVALO)
     if TELA_MONITOR_ATIVO and TELA_MONITOR_INTERVALO > 0:
         falar_sync(
-            f"Monitor de tela ativo. Vou sugerir ações a cada "
-            f"{TELA_MONITOR_INTERVALO} segundos quando o contexto mudar. "
-            f"Você também pode dizer: Jarvis, o que você sugere?"
+            f"Monitor de tela ativo. Vou comentar quando notar algo relevante."
         )
 
     while True:
