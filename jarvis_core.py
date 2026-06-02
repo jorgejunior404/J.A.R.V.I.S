@@ -52,6 +52,17 @@ try:
 except ImportError:
     _PIL_OK = False
 
+# ── WhatsApp (opcional) ──────────────────────────────────
+try:
+    from jarvis_whatsapp import (
+        enviar_whatsapp,
+        enviar_briefing_whatsapp,
+        iniciar_briefing_whatsapp,
+    )
+    _WA_OK = True
+except ImportError:
+    _WA_OK = False
+
 # ── Kokoro TTS (opcional) ────────────────────────────────
 try:
     from kokoro import KPipeline
@@ -311,93 +322,79 @@ def falar_sync(texto: str):
 
 
 # ═══════════════════════════════════════════════════════════
-#  IA  (Gemini) — com memória de conversa e personalidade
+#  IA  (Groq) — com memória de conversa e personalidade
 # ═══════════════════════════════════════════════════════════
 _cliente_ia  = None
-_historico   = deque(maxlen=12)
-
-_SYSTEM_PROMPT = f"""Você é J.A.R.V.I.S, assistente pessoal de IA de um desenvolvedor brasileiro.
-Sua personalidade:
-- Inteligente, direto e levemente bem-humorado — como um colega experiente, não um robô.
-- Faz comentários espirituosos ocasionais mas nunca perde o foco na tarefa.
-- Usa o nome "{USUARIO}" naturalmente, sem exagerar.
-- Respostas conversacionais: sem asteriscos, sem markdown, sem tópicos com bullet points.
-- Quando guiar o usuário em tarefas, faz passo a passo em linguagem natural, não em lista.
-- Se não sabe algo, admite com leveza. Se algo é difícil, reconhece. Nunca é condescendente.
-- Máximo 3 frases por resposta padrão, a menos que esteja guiando uma tarefa longa.
-- Fala português brasileiro natural — não "computadorês"."""
+_historico = deque(maxlen=12)
 
 try:
-    _cliente_ia = genai.Client(api_key=GEMINI_KEY)
-    log.info("Gemini inicializado.")
+    from groq import Groq
+    _cliente_ia = Groq(api_key=os.getenv("GROQ_API_KEY", ""))
+    log.info("Groq inicializado.")
 except Exception as e:
-    log.warning(f"Gemini offline: {e}")
+    _cliente_ia = None
+    log.warning(f"Groq offline: {e}")
 
 def limpar_historico():
     _historico.clear()
 
-def _montar_conversa(prompt: str) -> list:
-    msgs = []
-    for entrada, saida in _historico:
-        msgs.append({"role": "user",  "parts": [{"text": entrada}]})
-        msgs.append({"role": "model", "parts": [{"text": saida}]})
-    msgs.append({"role": "user", "parts": [{"text": prompt}]})
-    return msgs
-
 def consultar_ia(prompt: str, curto=False, sistema: str = None) -> str:
     if not _cliente_ia:
-        return f"Gemini não configurado, {USUARIO}."
-    modelos  = ["gemini-2.0-flash-lite", "gemini-2.5-flash", "gemini-2.0-flash"]
+        return f"IA não configurada, {USUARIO}."
     sys_text = sistema or _SYSTEM_PROMPT
     if curto:
         sys_text += "\nREGRA: resposta em no máximo 2 frases curtas."
-    prompt_completo = f"{sys_text}\n\n{prompt}"
+
+    msgs = [{"role": "system", "content": sys_text}]
+    for entrada, saida in _historico:
+        msgs.append({"role": "user",      "content": entrada})
+        msgs.append({"role": "assistant", "content": saida})
+    msgs.append({"role": "user", "content": prompt})
+
+    modelos = ["llama-3.3-70b-versatile", "llama3-8b-8192", "gemma2-9b-it"]
     for modelo in modelos:
         for tentativa in range(2):
             try:
-                if _historico:
-                    conteudo = _montar_conversa(f"{sys_text}\n\n{prompt}")
-                    resp = _cliente_ia.models.generate_content(
-                        model=modelo, contents=conteudo)
-                else:
-                    resp = _cliente_ia.models.generate_content(
-                        model=modelo, contents=prompt_completo)
-                texto = (resp.text or "").strip()
+                resp = _cliente_ia.chat.completions.create(
+                    model=modelo,
+                    messages=msgs,
+                    max_tokens=500,
+                )
+                texto = resp.choices[0].message.content.strip()
                 if texto:
                     _historico.append((prompt, texto))
                     return texto
-                return "Sem resposta."
             except Exception as e:
-                log.warning(f"IA [{modelo}] tentativa {tentativa+1}: {e}")
-                time.sleep(1.5)
+                log.warning(f"Groq [{modelo}] tentativa {tentativa+1}: {e}")
+                time.sleep(1)
     return f"Todos os modelos indisponíveis agora, {USUARIO}."
 
 def consultar_ia_com_imagem(prompt: str, imagem_path: str) -> str:
+    # Groq tem suporte a visão via llama-4
     if not _cliente_ia:
-        return f"Gemini não configurado, {USUARIO}."
+        return f"IA não configurada, {USUARIO}."
     if not os.path.exists(imagem_path):
-        return "Imagem não encontrada para análise."
+        return "Imagem não encontrada."
     try:
+        import base64
         with open(imagem_path, "rb") as f:
-            img_bytes = f.read()
-        from google.genai import types as gtypes
-        image_part = gtypes.Part.from_bytes(data=img_bytes, mime_type="image/png")
-        text_part  = gtypes.Part.from_text(text=prompt)
-        modelos = ["gemini-2.0-flash-lite", "gemini-2.5-flash", "gemini-2.0-flash"]
-        for modelo in modelos:
-            for tentativa in range(2):
-                try:
-                    resp = _cliente_ia.models.generate_content(
-                        model=modelo,
-                        contents=[gtypes.Content(parts=[image_part, text_part])]
-                    )
-                    return (resp.text or "").strip() or "Sem resposta da IA."
-                except Exception as e:
-                    log.warning(f"IA imagem [{modelo}] tentativa {tentativa+1}: {e}")
-                    time.sleep(1.5)
-        return f"Todos os modelos de visão indisponíveis, {USUARIO}."
+            img_b64 = base64.b64encode(f.read()).decode()
+        resp = _cliente_ia.chat.completions.create(
+            model="meta-llama/llama-4-scout-17b-16e-instruct",
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {
+                        "url": f"data:image/png;base64,{img_b64}"
+                    }},
+                ],
+            }],
+            max_tokens=500,
+        )
+        return resp.choices[0].message.content.strip()
     except Exception as e:
-        log.error(f"IA com imagem erro: {e}")
+        log.error(f"Groq visão: {e}")
         return f"Falha na análise visual, {USUARIO}."
 
 
@@ -1466,6 +1463,36 @@ def processar_comando(comando: str, hud):
         else:
             falar(f"O que pesquisar, {USUARIO}?")
 
+    # ── Briefing no WhatsApp (manual por voz) ────────────
+    elif any(p in comando for p in [
+        "manda briefing no whatsapp", "envia briefing whatsapp",
+        "briefing pelo whatsapp", "briefing no whatsapp",
+    ]):
+        if _WA_OK:
+            hud.safe_update("foco", "WHATSAPP", "Enviando...")
+            falar_sync("Preparando e enviando briefing pelo WhatsApp.")
+            ok = enviar_briefing_whatsapp(nome=USUARIO)
+            falar("Briefing enviado com sucesso." if ok
+                  else f"Não consegui enviar pelo WhatsApp agora, {USUARIO}.")
+        else:
+            falar(f"Módulo WhatsApp não instalado, {USUARIO}.")
+
+    # ── Mensagem livre no WhatsApp ────────────────────────
+    elif any(p in comando for p in [
+        "mensagem no whatsapp", "manda mensagem no whatsapp", "envia whatsapp",
+    ]):
+        if _WA_OK:
+            hud.safe_update("foco", "WHATSAPP", "Aguardando...")
+            falar_sync(f"O que mando pelo WhatsApp, {USUARIO}?")
+            msg = ouvir_pergunta(timeout=10, limite=40)
+            if msg:
+                ok = enviar_whatsapp(msg)
+                falar("Enviado." if ok else "Falha no envio, verifique a conexão.")
+            else:
+                falar("Não captei a mensagem.")
+        else:
+            falar(f"Módulo WhatsApp não instalado, {USUARIO}.")
+
     elif "clima" in comando or "tempo" in comando or "chuva" in comando:
         cidade = re.sub(r"jarvis|clima|tempo|em|como.*tá|como.*está|previsão", "",
                         comando).strip() or "Aracaju"
@@ -1579,10 +1606,19 @@ def rodar_jarvis(hud):
 
     notificar("JARVIS Online", f"{saudacao}, {USUARIO}.")
     threading.Thread(target=ev_anunciar_iniciais, args=(hud, falar_sync), daemon=True).start()
-
+    from jarvis_web_hud import iniciar_servidor_web
+    iniciar_servidor_web(hud, falar_sync, processar_comando)
     iniciar_monitor_tela(hud, intervalo=TELA_MONITOR_INTERVALO)
     if TELA_MONITOR_ATIVO and TELA_MONITOR_INTERVALO > 0:
         falar_sync("Monitor de tela ativo. Vou comentar quando notar algo relevante.")
+
+    # ── Briefing automático WhatsApp ─────────────────────
+    if _WA_OK:
+        iniciar_briefing_whatsapp(
+            nome=USUARIO,
+            horario=os.getenv("BRIEFING_WA_HORA", "07:00"),
+        )
+        log.info("Briefing automático WhatsApp agendado.")
 
     while True:
         hud.safe_update(False, "ESCUTANDO")
