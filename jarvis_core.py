@@ -75,6 +75,11 @@ except Exception:
     _kokoro_pipe = None
     sf           = None
     np           = None
+# ── Sistema de Plugins ───────────────────────────────────
+import jarvis_insights  # noqa: F401  (registra os comandos via plugin)
+import jarvis_rubberduck   # noqa: F401  (registra os comandos via plugin)
+from jarvis_plugins import processar_via_plugins
+from jarvis_plugins.jarvis_context import JarvisContext
 
 
 # ═══════════════════════════════════════════════════════════
@@ -169,6 +174,30 @@ _CONFIRMACOES = [
 def _confirmar() -> str:
     return random.choice(_CONFIRMACOES)
 
+_SYSTEM_PROMPT = (
+    f"Você é J.A.R.V.I.S, assistente pessoal inteligente e sofisticado. "
+    f"Responda sempre em português brasileiro, de forma direta, clara e com personalidade. "
+    f"Seja conciso mas completo. Chame o usuário de {USUARIO}. "
+    f"Evite markdown, asteriscos ou formatação especial nas respostas — fale como se estivesse conversando."
+)
+
+# ── Canal de chat broadcast ──────────────────────────────
+# Qualquer módulo pode registrar um callback para receber
+# o texto falado pelo JARVIS em tempo real.
+_chat_callbacks: list = []
+ 
+def registrar_chat_callback(fn):
+    """Registra uma função fn(role, texto) para receber mensagens do chat."""
+    if fn not in _chat_callbacks:
+        _chat_callbacks.append(fn)
+ 
+def _broadcast_chat(role: str, texto: str):
+    """Envia texto para todos os callbacks registrados (web HUD, etc)."""
+    for fn in _chat_callbacks:
+        try:
+            fn(role, texto)
+        except Exception as e:
+            log.warning(f"chat_callback erro: {e}")
 
 # ═══════════════════════════════════════════════════════════
 #  MICROFONE
@@ -288,7 +317,9 @@ def parar_fala():
 
 
 def falar(texto: str):
-    """Fala de forma assíncrona."""
+    """Fala de forma assíncrona e transmite texto para o chat."""
+    _broadcast_chat("jarvis", texto)   # ← linha nova
+ 
     global _fala_thread
     def _run():
         global _fala_proc
@@ -308,7 +339,9 @@ def falar(texto: str):
 
 
 def falar_sync(texto: str):
-    """Fala de forma síncrona (bloqueia até terminar)."""
+    """Fala de forma síncrona e transmite texto para o chat."""
+    _broadcast_chat("jarvis", texto)   # ← linha nova
+ 
     global _fala_proc
     grave = _gerar_audio(texto)
     if not grave:
@@ -1186,6 +1219,24 @@ def processar_comando(comando: str, hud):
     log.info(f"CMD: {comando}")
     hud.safe_update("ativo", "ATIVADO", comando[:32])
     hud.push_historico(re.sub(WAKE_WORD, "", comando).strip())
+    _broadcast_chat("user", re.sub(WAKE_WORD, "", comando).strip())
+
+    # ── Tenta resolver via sistema de plugins ────────────
+    ctx = JarvisContext(
+        hud=hud,
+        falar_fn=falar,
+        falar_sync_fn=falar_sync,
+        ouvir_pergunta_fn=ouvir_pergunta,
+        consultar_ia_fn=consultar_ia,
+        usuario=USUARIO,
+        confirmar_fn=_confirmar,
+        notificar_fn=notificar,
+        processar_comando_fn=lambda c: processar_comando(c, hud),
+    )
+    if processar_via_plugins(comando, ctx):
+        time.sleep(0.3)
+        hud.safe_update(False, "STANDBY", "Aguardando comando...")
+        return
 
     if any(p in comando for p in ["para de falar", "cala boca", "silencio", "cancela"]):
         parar_fala()
