@@ -114,6 +114,16 @@ class JarvisHUD(ctk.CTk):
         self._grafico_its  = []
         self._particulas   = []
         self._painel       = None
+           # Chat em memória (para o painel lateral)
+        self._chat_msgs = deque(maxlen=100)
+        self._chat_frame = None  # ref ao frame de bolhas
+ 
+        # Registra callback para receber mensagens do core
+        try:
+            from jarvis_core import registrar_chat_callback
+            registrar_chat_callback(self._on_chat_msg)
+        except Exception:
+            pass
 
         # setup janela raiz
         self.overrideredirect(True)
@@ -771,11 +781,11 @@ class JarvisHUD(ctk.CTk):
             return
         if not texto: return
         self._pvar.set("")
-        try:
-            self._hist_lb.insert("end", f"  › {texto}")
-            self._hist_lb.see("end")
-        except Exception:
-            pass
+ 
+        # Adiciona bolha do usuário imediatamente
+        self._chat_msgs.append(("user", texto))
+        self._append_bolha("user", texto)
+ 
         self.push_historico(texto)
         self.safe_update("ativo", "TEXTO", texto[:32])
         log.info(f"TEXTO: {texto}")
@@ -784,8 +794,65 @@ class JarvisHUD(ctk.CTk):
         except Exception:
             pass
         if hasattr(self, "_processador"):
-            threading.Thread(target=self._processador, args=(texto,), daemon=True).start()
-
+            threading.Thread(
+                target=self._processador,
+                args=(texto,), daemon=True
+            ).start()
+            
+     def _on_chat_msg(self, role: str, texto: str):
+        \"\"\"Callback chamado por falar/falar_sync do core.\"\"\"
+        self._chat_msgs.append((role, texto))
+        # Atualiza o painel se estiver aberto (thread-safe via after)
+        self.after(0, lambda: self._append_bolha(role, texto))
+ 
+    def _append_bolha(self, role: str, texto: str):
+        \"\"\"Adiciona uma bolha ao frame de chat se o painel estiver aberto.\"\"\"
+        if not self._chat_frame:
+            return
+        tk = self._tk
+        try:
+            if not self._chat_frame.winfo_exists():
+                return
+        except Exception:
+            return
+ 
+        is_jarvis = role == "jarvis"
+ 
+        # Container da bolha (alinha esquerda ou direita)
+        row = tk.Frame(self._chat_frame, bg=BG)
+        row.pack(fill="x", padx=6, pady=2, anchor="w" if is_jarvis else "e")
+ 
+        if is_jarvis:
+            # Prefixo J.
+            tk.Label(row, text="J.", bg=BG, fg=ACCENT,
+                     font=("Courier", 7, "bold")).pack(side="left", anchor="n", pady=2)
+ 
+        # Bolha
+        bolha_bg = "#0a1e35" if is_jarvis else "#0a2a1a"
+        bolha_fg = ACCENT    if is_jarvis else "#00FF88"
+        bolha_border = RING_MED if is_jarvis else "#004a2a"
+ 
+        bolha = tk.Frame(row, bg=bolha_bg,
+                         highlightbackground=bolha_border,
+                         highlightthickness=1)
+        bolha.pack(side="left" if is_jarvis else "right",
+                   anchor="w" if is_jarvis else "e")
+ 
+        # Texto com quebra de linha automática
+        tk.Label(bolha, text=texto, bg=bolha_bg, fg=bolha_fg,
+                 font=("Courier", 8), wraplength=240,
+                 justify="left", padx=8, pady=5).pack()
+ 
+        if not is_jarvis:
+            tk.Label(row, text="›", bg=BG, fg="#00FF88",
+                     font=("Courier", 7, "bold")).pack(side="right", anchor="n", pady=2)
+ 
+        # Scroll automático para o fim
+        try:
+            self._chat_canvas.update_idletasks()
+            self._chat_canvas.yview_moveto(1.0)
+        except Exception:
+            pass
 
 # ═══════════════════════════════════════════════════════════
 #  ATALHOS GLOBAIS DE TECLADO
