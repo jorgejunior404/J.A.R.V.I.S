@@ -75,6 +75,7 @@ except Exception:
     _kokoro_pipe = None
     sf           = None
     np           = None
+
 # ── Sistema de Plugins ───────────────────────────────────
 import jarvis_insights  # noqa: F401  (registra os comandos via plugin)
 import jarvis_rubberduck   # noqa: F401  (registra os comandos via plugin)
@@ -182,15 +183,13 @@ _SYSTEM_PROMPT = (
 )
 
 # ── Canal de chat broadcast ──────────────────────────────
-# Qualquer módulo pode registrar um callback para receber
-# o texto falado pelo JARVIS em tempo real.
 _chat_callbacks: list = []
- 
+
 def registrar_chat_callback(fn):
     """Registra uma função fn(role, texto) para receber mensagens do chat."""
     if fn not in _chat_callbacks:
         _chat_callbacks.append(fn)
- 
+
 def _broadcast_chat(role: str, texto: str):
     """Envia texto para todos os callbacks registrados (web HUD, etc)."""
     for fn in _chat_callbacks:
@@ -199,21 +198,36 @@ def _broadcast_chat(role: str, texto: str):
         except Exception as e:
             log.warning(f"chat_callback erro: {e}")
 
+
 # ═══════════════════════════════════════════════════════════
 #  MICROFONE
 # ═══════════════════════════════════════════════════════════
 rec = sr.Recognizer()
-rec.pause_threshold          = 0.6
-rec.non_speaking_duration    = 0.4
-rec.dynamic_energy_threshold = True
+rec.pause_threshold          = 0.8   # FIX: era 0.6, aumentado para frases mais longas
+rec.non_speaking_duration    = 0.5   # FIX: era 0.4
+rec.dynamic_energy_threshold = False  # FIX: DESATIVADO — impedia detecção do wake word
+rec.energy_threshold         = 300   # FIX: valor fixo estável (ajuste conforme ambiente)
 mic = sr.Microphone()
 
-def calibrar_microfone():
-    with mic as f:
-        rec.adjust_for_ambient_noise(f, duration=1.5)
-    log.info(f"Mic calibrado. Threshold={rec.energy_threshold:.0f}")
+# Lock para evitar dois ouvir() simultâneos (TTS vs microfone)
+_mic_lock = threading.Lock()
 
-def ouvir(timeout=4, limite=10) -> str:
+def calibrar_microfone():
+    """Calibra o threshold de energia uma única vez na inicialização."""
+    with _mic_lock:
+        with mic as f:
+            rec.adjust_for_ambient_noise(f, duration=2.0)
+        # FIX: trava o threshold após calibração para não subir indefinidamente
+        rec.dynamic_energy_threshold = False
+    log.info(f"Mic calibrado. Threshold fixado em {rec.energy_threshold:.0f}")
+
+def ouvir(timeout=5, limite=12) -> str:
+    """Escuta o microfone e retorna o texto reconhecido (lowercase)."""
+    # FIX: não tenta capturar áudio se o TTS ainda está tocando
+    if _fala_proc and _fala_proc.poll() is None:
+        return ""
+    if not _mic_lock.acquire(blocking=False):
+        return ""
     try:
         with mic as f:
             audio = rec.listen(f, timeout=timeout, phrase_time_limit=limite)
@@ -222,8 +236,13 @@ def ouvir(timeout=4, limite=10) -> str:
         return ""
     except Exception as e:
         log.error(f"ouvir: {e}"); return ""
+    finally:
+        _mic_lock.release()
 
 def ouvir_pergunta(timeout=10, limite=30) -> str:
+    """Escuta uma pergunta/resposta do usuário (bloqueante)."""
+    if not _mic_lock.acquire(blocking=True, timeout=15):
+        return ""
     try:
         with mic as f:
             rec.adjust_for_ambient_noise(f, duration=0.3)
@@ -233,6 +252,8 @@ def ouvir_pergunta(timeout=10, limite=30) -> str:
         return ""
     except Exception as e:
         log.error(f"ouvir_pergunta: {e}"); return ""
+    finally:
+        _mic_lock.release()
 
 def contem_wake_word(texto: str, limiar=0.72) -> bool:
     palavras = texto.split()
@@ -249,6 +270,12 @@ def contem_wake_word(texto: str, limiar=0.72) -> bool:
 # ═══════════════════════════════════════════════════════════
 _fala_thread = None
 _fala_proc   = None
+
+# FIX: fila de TTS para evitar falas sobrepostas
+_fala_queue: deque = deque()
+_fala_queue_lock   = threading.Lock()
+_fala_queue_event  = threading.Event()
+_fala_worker_ativo = False
 
 
 def _gerar_audio_kokoro(texto: str, dest: str) -> str | None:
@@ -314,34 +341,16 @@ def parar_fala():
     global _fala_proc
     if _fala_proc and _fala_proc.poll() is None:
         _fala_proc.terminate()
+    # FIX: também limpa a fila ao parar
+    with _fala_queue_lock:
+        _fala_queue.clear()
 
 
-def falar(texto: str):
-    """Fala de forma assíncrona e transmite texto para o chat."""
-    _broadcast_chat("jarvis", texto)   # ← linha nova
- 
-    global _fala_thread
-    def _run():
-        global _fala_proc
-        grave = _gerar_audio(texto)
-        if not grave:
-            print(f"[JARVIS] {texto}"); return
-        try:
-            _fala_proc = subprocess.Popen(_player_para(grave) + ["-q", grave])
-            _fala_proc.wait()
-        finally:
-            if grave and os.path.exists(grave):
-                os.remove(grave)
-    if _fala_thread and _fala_thread.is_alive():
-        _fala_thread.join(timeout=15)
-    _fala_thread = threading.Thread(target=_run, daemon=True)
-    _fala_thread.start()
-
-
-def falar_sync(texto: str):
-    """Fala de forma síncrona e transmite texto para o chat."""
-    _broadcast_chat("jarvis", texto)   # ← linha nova
- 
+def _reproduzir_audio(texto: str, sincrono: bool = False):
+    """
+    Núcleo de reprodução — gera e toca o áudio.
+    Chamado pelo worker da fila (assíncrono) ou diretamente (síncrono).
+    """
     global _fala_proc
     grave = _gerar_audio(texto)
     if not grave:
@@ -352,6 +361,86 @@ def falar_sync(texto: str):
     finally:
         if grave and os.path.exists(grave):
             os.remove(grave)
+
+
+def _fila_worker():
+    """
+    FIX: Worker único que consome a fila de TTS em série,
+    garantindo que nenhuma fala sobreponha outra.
+    """
+    global _fala_worker_ativo
+    _fala_worker_ativo = True
+    while True:
+        _fala_queue_event.wait()
+        _fala_queue_event.clear()
+        while True:
+            with _fala_queue_lock:
+                if not _fala_queue:
+                    break
+                texto = _fala_queue.popleft()
+            _reproduzir_audio(texto)
+    # nunca chega aqui, mas por segurança:
+    _fala_worker_ativo = False
+
+
+# Inicia o worker de fila na importação do módulo
+_fila_thread = threading.Thread(target=_fila_worker, daemon=True, name="TTSWorker")
+_fila_thread.start()
+
+
+def falar(texto: str):
+    """Enfileira fala assíncrona e transmite para o chat."""
+    _broadcast_chat("jarvis", texto)
+    with _fala_queue_lock:
+        _fala_queue.append(texto)
+    _fala_queue_event.set()
+
+
+def falar_sync(texto: str):
+    """
+    Fala síncrona: enfileira e bloqueia até esta frase ser reproduzida.
+    FIX: usa o mesmo worker, evitando sobreposição com chamadas assíncronas.
+    """
+    _broadcast_chat("jarvis", texto)
+    done = threading.Event()
+
+    def _item_com_callback():
+        _reproduzir_audio(texto)
+        done.set()
+
+    # Injeta diretamente no worker via flag especial na fila
+    # Simples: só enfileira e aguarda esvaziamento desta entrada
+    with _fala_queue_lock:
+        _fala_queue.append(("__SYNC__", texto, done))
+    _fala_queue_event.set()
+    done.wait(timeout=60)
+
+
+def _fila_worker():  # noqa: F811 — redefine com suporte a sync
+    """
+    Worker de fila com suporte a itens síncronos.
+    Itens normais: str
+    Itens síncronos: ("__SYNC__", texto, Event)
+    """
+    while True:
+        _fala_queue_event.wait()
+        _fala_queue_event.clear()
+        while True:
+            with _fala_queue_lock:
+                if not _fala_queue:
+                    break
+                item = _fala_queue.popleft()
+            if isinstance(item, tuple) and item[0] == "__SYNC__":
+                _, texto, done_event = item
+                _reproduzir_audio(texto)
+                done_event.set()
+            else:
+                _reproduzir_audio(item)
+
+
+# Reinicia o worker com a versão final
+_fila_thread = threading.Thread(target=_fila_worker, daemon=True, name="TTSWorker")
+_fila_thread.start()
 
 
 # ═══════════════════════════════════════════════════════════
@@ -403,7 +492,6 @@ def consultar_ia(prompt: str, curto=False, sistema: str = None) -> str:
     return f"Todos os modelos indisponíveis agora, {USUARIO}."
 
 def consultar_ia_com_imagem(prompt: str, imagem_path: str) -> str:
-    # Groq tem suporte a visão via llama-4
     if not _cliente_ia:
         return f"IA não configurada, {USUARIO}."
     if not os.path.exists(imagem_path):
@@ -727,6 +815,10 @@ def ev_extrair_data_e_nome(comando: str):
     return dia, mes, ano, m_nome.group(1).strip()
 
 def ev_anunciar_iniciais(hud, falar_fn):
+    """
+    FIX: usa falar_fn (que já é falar_sync) — a serialização é garantida
+    pelo worker de fila, não precisamos de sleep aqui.
+    """
     eventos = ev_listar()
     if not eventos:
         return
@@ -1630,8 +1722,15 @@ def processar_comando(comando: str, hud):
 #  LOOP PRINCIPAL
 # ═══════════════════════════════════════════════════════════
 def rodar_jarvis(hud):
+    """
+    FIX: Inicialização totalmente sequencial — zero falas sobrepostas.
+    Toda fala usa falar_sync durante o boot para garantir ordem correta.
+    O Web HUD e monitor só iniciam DEPOIS das falas de boot.
+    """
     time.sleep(1)
     hud.safe_update(False, "CALIBRANDO", "Ajustando microfone...")
+
+    # FIX: calibração antes de qualquer fala
     calibrar_microfone()
 
     agora    = datetime.datetime.now()
@@ -1649,6 +1748,7 @@ def rodar_jarvis(hud):
     engine_str = "Kokoro ativo." if _KOKORO_OK else "Edge TTS ativo."
     hud.safe_update(False, "ONLINE", "Mark XIII")
 
+    # FIX: saudação via falar_sync — bloqueia até terminar
     falar_sync(random.choice([
         f"{saudacao}, {USUARIO}. Sistemas Mark XIII operacionais. {bat_str} {engine_str} Pronto quando você quiser.",
         f"{saudacao}. Mark XIII online. {bat_str} O que a gente vai fazer hoje?",
@@ -1656,9 +1756,15 @@ def rodar_jarvis(hud):
     ]))
 
     notificar("JARVIS Online", f"{saudacao}, {USUARIO}.")
-    threading.Thread(target=ev_anunciar_iniciais, args=(hud, falar_sync), daemon=True).start()
+
+    # FIX: agenda anunciada SEQUENCIALMENTE (ainda bloqueando com falar_sync)
+    # Não usa thread aqui para não sobrepor com o Web HUD
+    ev_anunciar_iniciais(hud, falar_sync)
+
+    # FIX: só DEPOIS das falas de boot iniciamos o Web HUD e monitor
     from jarvis_web_hud import iniciar_servidor_web
     iniciar_servidor_web(hud, falar_sync, processar_comando)
+
     iniciar_monitor_tela(hud, intervalo=TELA_MONITOR_INTERVALO)
     if TELA_MONITOR_ATIVO and TELA_MONITOR_INTERVALO > 0:
         falar_sync("Monitor de tela ativo. Vou comentar quando notar algo relevante.")
@@ -1671,9 +1777,10 @@ def rodar_jarvis(hud):
         )
         log.info("Briefing automático WhatsApp agendado.")
 
+    # ── Loop de escuta ────────────────────────────────────
     while True:
         hud.safe_update(False, "ESCUTANDO")
-        comando = ouvir(timeout=4, limite=10)
+        comando = ouvir(timeout=5, limite=12)
         if not comando or not contem_wake_word(comando):
             continue
         processar_comando(comando, hud)

@@ -41,14 +41,15 @@ CORES = {
 }
 
 # Cores base da UI
-BG        = "#050d1a"
-BG2       = "#0a1628"
-ACCENT    = "#00BFFF"
-RING_DIM  = "#071e30"
-RING_MED  = "#0a3a55"
-TEXT_OFF  = "#0d2a3d"
-TEXT_DIM  = "#1a4a60"
-TEXT_MED  = "#2a6a80"
+BG        = "#030810"
+BG2       = "#071020"
+ACCENT    = "#00D4FF"
+ACCENT2   = "#00FF88"
+RING_DIM  = "#081828"
+RING_MED  = "#0d3a50"
+TEXT_OFF  = "#0c2235"
+TEXT_DIM  = "#1a5070"
+TEXT_MED  = "#2a7a9a"
 
 
 # ═══════════════════════════════════════════════════════════
@@ -226,58 +227,73 @@ class JarvisHUD(ctk.CTk):
     def _draw_core(self):
         cx, cy = self.CX, self.CY
 
-        # Halo externo (círculo suavíssimo, quase invisível)
-        for i, (r, alpha) in enumerate([(68,0.04),(60,0.07),(52,0.12)]):
+        # Halo externo — mais camadas, glow mais pronunciado
+        for r, alpha in [(78, 0.03), (70, 0.05), (62, 0.09), (54, 0.14), (46, 0.18)]:
             cor = _hex_blend(ACCENT, alpha)
             self.cv.create_oval(cx-r, cy-r, cx+r, cy+r,
                                  outline=cor, fill="", width=1)
 
-        # Anéis animados principais — armazenamos refs
-        self.arc_a = self.cv.create_arc(cx-50, cy-50, cx+50, cy+50,
-                                         start=0, extent=70, style="arc",
-                                         outline=ACCENT, width=2)
-        self.arc_b = self.cv.create_arc(cx-50, cy-50, cx+50, cy+50,
-                                         start=180, extent=70, style="arc",
-                                         outline=RING_MED, width=2)
-        self.arc_c = self.cv.create_arc(cx-38, cy-38, cx+38, cy+38,
-                                         start=90, extent=50, style="arc",
-                                         outline=RING_MED, width=1)
-        # Anel externo lento (segundo anel, sentido oposto)
-        self.arc_d = self.cv.create_arc(cx-60, cy-60, cx+60, cy+60,
-                                         start=45, extent=25, style="arc",
-                                         outline=TEXT_DIM, width=1)
-        self.arc_e = self.cv.create_arc(cx-60, cy-60, cx+60, cy+60,
-                                         start=225, extent=25, style="arc",
-                                         outline=TEXT_DIM, width=1)
+        # Anel externo sólido brilhante
+        self.cv.create_oval(cx-56, cy-56, cx+56, cy+56,
+                             outline=_hex_blend(ACCENT, 0.25), fill="", width=1)
 
-        # Anel médio pulsante
-        self.anel = self.cv.create_oval(cx-32, cy-32, cx+32, cy+32,
+        # Anéis animados principais
+        self.arc_a = self.cv.create_arc(cx-54, cy-54, cx+54, cy+54,
+                                         start=0, extent=80, style="arc",
+                                         outline=ACCENT, width=2)
+        self.arc_b = self.cv.create_arc(cx-54, cy-54, cx+54, cy+54,
+                                         start=180, extent=80, style="arc",
+                                         outline=_hex_blend(ACCENT, 0.35), width=2)
+        self.arc_c = self.cv.create_arc(cx-42, cy-42, cx+42, cy+42,
+                                         start=90, extent=55, style="arc",
+                                         outline=_hex_blend(ACCENT, 0.28), width=1)
+        # Anel externo lento (sentido oposto)
+        self.arc_d = self.cv.create_arc(cx-66, cy-66, cx+66, cy+66,
+                                         start=45, extent=30, style="arc",
+                                         outline=_hex_blend(ACCENT, 0.18), width=1)
+        self.arc_e = self.cv.create_arc(cx-66, cy-66, cx+66, cy+66,
+                                         start=225, extent=30, style="arc",
+                                         outline=_hex_blend(ACCENT, 0.18), width=1)
+        # Anel verde girando na direcao oposta
+        self.arc_f = self.cv.create_arc(cx-48, cy-48, cx+48, cy+48,
+                                         start=20, extent=40, style="arc",
+                                         outline=_hex_blend("#00FF88", 0.22), width=1)
+
+        # Anel medio pulsante
+        self.anel = self.cv.create_oval(cx-36, cy-36, cx+36, cy+36,
                                          outline=ACCENT, fill="", width=1)
 
-        # Núcleo sólido
-        self.pulso = self.cv.create_oval(cx-20, cy-20, cx+20, cy+20,
+        # Nucleo solido maior
+        self.pulso = self.cv.create_oval(cx-22, cy-22, cx+22, cy+22,
                                           fill=BG2, outline=ACCENT, width=2)
 
-        # Texto "AI"
-        self.letra = self.cv.create_text(cx, cy-1, text="AI",
-                                          font=("Courier", 11, "bold"), fill=ACCENT)
+        # Texto AI centralizado
+        self.letra = self.cv.create_text(cx, cy, text="AI",
+                                          font=("Courier", 12, "bold"), fill=ACCENT)
 
-        # Marcações cardinais (4 traços limpos)
+        # Marcacoes cardinais com traco duplo
         for angd in [0, 90, 180, 270]:
-            rad  = math.radians(angd)
-            x1 = cx + 65 * math.cos(rad);  y1 = cy + 65 * math.sin(rad)
-            x2 = cx + 72 * math.cos(rad);  y2 = cy + 72 * math.sin(rad)
-            self.cv.create_line(x1,y1,x2,y2, fill=RING_MED, width=1)
+            rad = math.radians(angd)
+            x1 = cx + 72 * math.cos(rad); y1 = cy + 72 * math.sin(rad)
+            x2 = cx + 80 * math.cos(rad); y2 = cy + 80 * math.sin(rad)
+            self.cv.create_line(x1, y1, x2, y2, fill=RING_MED, width=2, capstyle="round")
+        # Marcacoes diagonais menores
+        for angd in [45, 135, 225, 315]:
+            rad = math.radians(angd)
+            x1 = cx + 70 * math.cos(rad); y1 = cy + 70 * math.sin(rad)
+            x2 = cx + 76 * math.cos(rad); y2 = cy + 76 * math.sin(rad)
+            self.cv.create_line(x1, y1, x2, y2,
+                                fill=_hex_blend(ACCENT, 0.2), width=1)
 
     # ── Nível 1 extras: título + status + waveform ───────
     def _draw_nivel1_extras(self):
         W, H, cx, cy = self.W, self.H, self.CX, self.CY
 
-        # Título topo
-        self.cv.create_text(W//2, 14, text="J.A.R.V.I.S",
-                             font=("Courier", 9, "bold"), fill=ACCENT)
-        self.cv.create_text(W//2, 25, text="M A R K  X I I",
-                             font=("Courier", 5), fill=TEXT_DIM)
+        # Titulo topo modernizado
+        self.cv.create_text(W//2, 13, text="J.A.R.V.I.S",
+                             font=("Courier", 10, "bold"), fill=ACCENT)
+        self.cv.create_text(W//2, 25, text="·  M K  X I V  ·",
+                             font=("Courier", 6), fill=TEXT_MED)
 
         # Divisor topo
         self._div_topo = W//2
@@ -326,19 +342,20 @@ class JarvisHUD(ctk.CTk):
 
         def _barra(label, y, fill_cor):
             self.cv.create_text(14, y + bar_h//2, text=label,
-                                 font=("Courier", 6, "bold"), fill=TEXT_DIM, anchor="w")
+                                 font=("Courier", 6, "bold"), fill=TEXT_MED, anchor="w")
+            # fundo da barra com borda levemente visivel
             self.cv.create_rectangle(BX, y, BX+BW, y+bar_h,
-                                      outline=RING_DIM, fill=BG)
+                                      outline=RING_MED, fill=BG)
             f = self.cv.create_rectangle(BX, y, BX, y+bar_h,
                                           outline="", fill=fill_cor)
             v = self.cv.create_text(W-15, y + bar_h//2, text="--",
-                                     font=("Courier", 6), fill=ACCENT, anchor="e")
+                                     font=("Courier", 6, "bold"), fill=ACCENT, anchor="e")
             return f, v, BX, BX+BW, y, y+bar_h
 
-        self._pwr = _barra("PWR", y0+12,        "#005080")
-        self._cpu = _barra("CPU", y0+12+bar_gap, "#00387a")
-        self._ram = _barra("RAM", y0+12+bar_gap*2, "#004a3a")
-        self._net = _barra("NET", y0+12+bar_gap*3, "#003a5a")
+        self._pwr = _barra("⚡", y0+12,          "#006090")
+        self._cpu = _barra("⬡", y0+12+bar_gap,   "#003a9a")
+        self._ram = _barra("▣", y0+12+bar_gap*2, "#005a4a")
+        self._net = _barra("↕", y0+12+bar_gap*3, "#004a7a")
 
         # Linha divisória final nível 2
         ly = y0 + 12 + bar_gap*4 + 6
@@ -388,10 +405,10 @@ class JarvisHUD(ctk.CTk):
     # ─────────────────────────────────────────────────────
     def _animacao_boot(self):
         etapas = [
-            ("#004488", "INICIALIZANDO", "Mark XII..."),
+            ("#004488", "INICIALIZANDO", "Mark XIV..."),
             ("#0055aa", "CARREGANDO",    "Módulos IA..."),
-            ("#0066bb", "CONECTANDO",    "Gemini..."),
-            ("#0077cc", "CALIBRANDO",    "Microfone..."),
+            ("#0066cc", "CONECTANDO",    "Groq LLM..."),
+            ("#0088dd", "CALIBRANDO",    "Microfone..."),
             (ACCENT,    "ONLINE",        "Sistemas OK"),
         ]
 
@@ -423,6 +440,10 @@ class JarvisHUD(ctk.CTk):
             if hasattr(self, attr):
                 field = "fill" if attr == "letra" else "outline"
                 self.cv.itemconfig(getattr(self, attr), **{field: cor})
+        # arc_f sempre verde, independente do estado
+        if hasattr(self, "arc_f"):
+            self.cv.itemconfig(self.arc_f,
+                               outline=_hex_blend("#00FF88", 0.22))
 
     # ─────────────────────────────────────────────────────
     #  PARTÍCULAS (nível 1 — só ao redor do núcleo)
@@ -471,11 +492,13 @@ class JarvisHUD(ctk.CTk):
         a, a2  = self._ang, self._ang2
 
         if hasattr(self, "arc_a"):
-            self.cv.itemconfig(self.arc_a, start=a,      extent=70)
-            self.cv.itemconfig(self.arc_b, start=a+180,  extent=70)
-            self.cv.itemconfig(self.arc_c, start=a+90,   extent=50)
-            self.cv.itemconfig(self.arc_d, start=-a2,    extent=25)
-            self.cv.itemconfig(self.arc_e, start=-a2+180,extent=25)
+            self.cv.itemconfig(self.arc_a, start=a,       extent=80)
+            self.cv.itemconfig(self.arc_b, start=a+180,   extent=80)
+            self.cv.itemconfig(self.arc_c, start=a+90,    extent=55)
+            self.cv.itemconfig(self.arc_d, start=-a2,     extent=30)
+            self.cv.itemconfig(self.arc_e, start=-a2+180, extent=30)
+        if hasattr(self, "arc_f"):
+            self.cv.itemconfig(self.arc_f, start=a*1.3+20, extent=40)
 
         # Anel pulsante
         if hasattr(self, "anel"):
@@ -704,41 +727,58 @@ class JarvisHUD(ctk.CTk):
         inner = tk.Frame(p, bg=BG)
         inner.pack(fill="both", expand=True, padx=1, pady=1)
 
-        # Cabeçalho
+        # Cabecalho
         hdr = tk.Frame(inner, bg=BG2)
         hdr.pack(fill="x")
-        tk.Label(hdr, text="J.A.R.V.I.S  ·  COMANDO",
+        tk.Label(hdr, text="J.A.R.V.I.S  ·  CHAT",
                  bg=BG2, fg=ACCENT, font=("Courier", 9, "bold")).pack(
                  side="left", padx=12, pady=8)
         tk.Button(hdr, text="✕", bg=BG2, fg="#FF4444",
                   relief="flat", bd=0, font=("Courier", 11, "bold"),
                   cursor="hand2", activebackground="#1a0010",
                   command=self._toggle_painel).pack(side="right", padx=8)
-        tk.Frame(inner, bg=RING_DIM, height=1).pack(fill="x")
+        tk.Frame(inner, bg=RING_MED, height=1).pack(fill="x")
 
-        # Histórico
-        tk.Label(inner, text="  HISTÓRICO",
-                 bg=BG, fg=TEXT_DIM, font=("Courier", 6, "bold")).pack(
-                 anchor="w", padx=8, pady=(8,2))
-        self._hist_lb = tk.Listbox(
-            inner, bg="#040c18", fg=TEXT_MED,
-            selectbackground=RING_MED, selectforeground=ACCENT,
-            font=("Courier", 8), relief="flat", bd=0,
-            highlightthickness=0, activestyle="none", height=5)
-        self._hist_lb.pack(fill="x", padx=10, pady=(0,6))
-        for cmd in reversed(list(self._hist_cmds)):
-            self._hist_lb.insert("end", f"  › {cmd}")
+        # Area de chat com scroll
+        chat_outer = tk.Frame(inner, bg=BG)
+        chat_outer.pack(fill="both", expand=True, padx=0, pady=0)
 
-        def _reusar(e):
-            sel = self._hist_lb.curselection()
-            if sel:
-                self._pvar.set(self._hist_lb.get(sel[0]).strip().lstrip("›").strip())
-                self._pentry.focus_force()
-        self._hist_lb.bind("<Double-Button-1>", _reusar)
+        self._chat_canvas = tk.Canvas(chat_outer, bg=BG, highlightthickness=0)
+        scrollbar = tk.Scrollbar(chat_outer, orient="vertical",
+                                  command=self._chat_canvas.yview,
+                                  bg=BG, troughcolor=BG2, width=6)
+        self._chat_canvas.configure(yscrollcommand=scrollbar.set)
 
-        tk.Frame(inner, bg=RING_DIM, height=1).pack(fill="x", padx=8)
+        scrollbar.pack(side="right", fill="y")
+        self._chat_canvas.pack(side="left", fill="both", expand=True)
+
+        self._chat_frame = tk.Frame(self._chat_canvas, bg=BG)
+        self._chat_canvas_window = self._chat_canvas.create_window(
+            (0, 0), window=self._chat_frame, anchor="nw"
+        )
+
+        def _on_frame_configure(e):
+            self._chat_canvas.configure(
+                scrollregion=self._chat_canvas.bbox("all"))
+        def _on_canvas_configure(e):
+            self._chat_canvas.itemconfig(
+                self._chat_canvas_window, width=e.width)
+
+        self._chat_frame.bind("<Configure>", _on_frame_configure)
+        self._chat_canvas.bind("<Configure>", _on_canvas_configure)
+
+        # Recarrega historico de mensagens
+        for role, msg in list(self._chat_msgs):
+            self._append_bolha(role, msg)
+
+        # Scroll ate o fim
+        self._chat_canvas.update_idletasks()
+        self._chat_canvas.yview_moveto(1.0)
+
+        tk.Frame(inner, bg=RING_MED, height=1).pack(fill="x")
         tk.Label(inner, text="  Enter envia  ·  Esc fecha",
-                 bg=BG, fg=TEXT_OFF, font=("Courier", 6)).pack(anchor="w", padx=8, pady=4)
+                 bg=BG, fg=TEXT_OFF, font=("Courier", 6)).pack(
+                 anchor="w", padx=8, pady=(4, 2))
         tk.Frame(inner, bg=RING_DIM, height=1).pack(fill="x", padx=8)
 
         # Input
@@ -799,14 +839,13 @@ class JarvisHUD(ctk.CTk):
                 args=(texto,), daemon=True
             ).start()
             
-     def _on_chat_msg(self, role: str, texto: str):
-        \"\"\"Callback chamado por falar/falar_sync do core.\"\"\"
+    def _on_chat_msg(self, role: str, texto: str):
+        """Callback chamado por falar/falar_sync do core."""
         self._chat_msgs.append((role, texto))
-        # Atualiza o painel se estiver aberto (thread-safe via after)
         self.after(0, lambda: self._append_bolha(role, texto))
- 
+
     def _append_bolha(self, role: str, texto: str):
-        \"\"\"Adiciona uma bolha ao frame de chat se o painel estiver aberto.\"\"\"
+        """Adiciona uma bolha ao frame de chat se o painel estiver aberto."""
         if not self._chat_frame:
             return
         tk = self._tk
@@ -870,21 +909,23 @@ def registrar_atalho(hud: JarvisHUD):
         try:
             from pynput import keyboard as kb
 
-            mapa = {
-                kb.HotKey.parse("<ctrl>+<shift>+j"): hud.toggle_visibilidade,
-                kb.HotKey.parse("<ctrl>+<shift>+1"): lambda: hud.set_nivel(1),
-                kb.HotKey.parse("<ctrl>+<shift>+2"): lambda: hud.set_nivel(2),
-                kb.HotKey.parse("<ctrl>+<shift>+3"): lambda: hud.set_nivel(3),
+            combinacoes = {
+                frozenset([kb.Key.ctrl_l, kb.Key.shift, kb.KeyCode.from_char('j')]): hud.toggle_visibilidade,
+                frozenset([kb.Key.ctrl_l, kb.Key.shift, kb.KeyCode.from_char('1')]): lambda: hud.set_nivel(1),
+                frozenset([kb.Key.ctrl_l, kb.Key.shift, kb.KeyCode.from_char('2')]): lambda: hud.set_nivel(2),
+                frozenset([kb.Key.ctrl_l, kb.Key.shift, kb.KeyCode.from_char('3')]): lambda: hud.set_nivel(3),
             }
-            hotkeys = {k: kb.HotKey(k, fn) for k, fn in mapa.items()}
+
+            pressionadas = set()
 
             def on_press(key):
-                for hk in hotkeys.values():
-                    hk.press(key)
+                pressionadas.add(key)
+                for combo, fn in combinacoes.items():
+                    if combo.issubset(pressionadas):
+                        fn()
 
             def on_release(key):
-                for hk in hotkeys.values():
-                    hk.release(key)
+                pressionadas.discard(key)
 
             with kb.Listener(on_press=on_press, on_release=on_release) as l:
                 log.info("Atalhos registrados: Ctrl+Shift+J/1/2/3")
