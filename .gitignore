@@ -11,3 +11,5 @@ __pycache__/
 *.pyc
 jarvis.log
 token.json
+jarvis.log
+*.log
