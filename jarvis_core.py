@@ -1711,7 +1711,8 @@ def processar_comando(comando: str, hud):
         if _app_em_foco:
             contexto_tela = f"\n[TELA ATUAL: {_app_em_foco}]"
         prompt_enriquecido = clean + contexto_guia + contexto_tela
-        resposta = consultar_ia(prompt_enriquecido, curto=True)
+        from jarvis_tools import consultar_ia_com_tools
+        resposta = consultar_ia_com_tools(prompt_enriquecido)
         falar(resposta.replace("*", "").replace("#", ""))
 
     time.sleep(0.3)
